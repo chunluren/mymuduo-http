@@ -107,7 +107,7 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         
         // 等待可用连接或池未满
-        bool success = cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+        cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
             [this] { return closed_ || !pool_.empty() || totalCreated_ < maxSize_; });
         
         if (closed_) return nullptr;

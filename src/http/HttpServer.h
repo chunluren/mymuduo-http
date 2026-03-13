@@ -89,11 +89,11 @@ private:
     std::unordered_map<std::string, std::string> staticDirs_;
     std::atomic<bool> started_;
     
-    void onConnection(const TcpConnectionPtr& conn) {
+    void onConnection(const TcpConnectionPtr& /*conn*/) {
         // 可以记录连接状态
     }
     
-    void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp time) {
+    void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp /*time*/) {
         // 循环处理粘包/流水线
         while (buf->readableBytes() > 0) {
             HttpRequest request;
@@ -262,7 +262,7 @@ private:
         response = HttpResponse::notFound("Not Found: " + request.path);
     }
     
-    void serveFile(const HttpRequest& request, HttpResponse& response, 
+    void serveFile(const HttpRequest& /*request*/, HttpResponse& response, 
                    const std::string& dir, const std::string& filename) {
         // 安全检查：防止路径遍历攻击
         if (filename.empty() || 

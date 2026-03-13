@@ -53,3 +53,6 @@ private:
     
     static std::atomic<int64_t> nextId_;
 };
+
+// 静态成员定义（头文件内联定义，C++17 inline static）
+inline std::atomic<int64_t> Timer::nextId_{0};
