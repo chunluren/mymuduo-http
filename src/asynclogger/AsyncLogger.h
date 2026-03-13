@@ -1,4 +1,4 @@
-// AsyncLogger.h - 异步日志系统
+// AsyncLogger.h - 异步日志系统（修复版）
 #pragma once
 
 #include <string>
@@ -31,7 +31,7 @@ struct LogEntry {
     std::string message;
 };
 
-// 异步日志器 - 双缓冲技术
+// 异步日志器 - 双缓冲技术（线程安全版）
 class AsyncLogger {
 public:
     static AsyncLogger& instance() {
@@ -40,21 +40,30 @@ public:
     }
     
     void setLogFile(const std::string& filename) {
+        std::lock_guard<std::mutex> lock(mutex_);
         filename_ = filename;
     }
     
     void setLogLevel(LogLevel level) {
-        level_ = level;
+        level_.store(level, std::memory_order_relaxed);
     }
     
     void start() {
-        running_ = true;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (running_.load()) return;  // 幂等：防止重复启动
+        
+        running_.store(true);
         writerThread_ = std::thread(&AsyncLogger::writerLoop, this);
     }
     
     void stop() {
-        running_ = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!running_.load()) return;
+            running_.store(false);
+        }
         cv_.notify_one();
+        
         if (writerThread_.joinable()) {
             writerThread_.join();
         }
@@ -62,7 +71,7 @@ public:
     
     // 主日志接口（非阻塞）
     void log(LogLevel level, const char* file, int line, const char* fmt, ...) {
-        if (level < level_) return;
+        if (level < level_.load(std::memory_order_relaxed)) return;
         
         // 格式化消息
         char buf[4096];
@@ -106,18 +115,39 @@ private:
     }
     
     void writerLoop() {
-        std::ofstream file(filename_, std::ios::app);
+        std::ofstream file;
+        bool fileOpened = false;
         
-        while (running_ || !currentBuffer_->empty()) {
+        while (running_.load() || !currentBuffer_->empty()) {
             // 等待缓冲区有数据
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 cv_.wait_for(lock, std::chrono::milliseconds(100), [this] {
-                    return !running_ || currentBuffer_->size() >= kFlushThreshold;
+                    return !running_.load() || currentBuffer_->size() >= kFlushThreshold;
                 });
                 
                 // 交换缓冲区
                 std::swap(currentBuffer_, flushBuffer_);
+            }
+            
+            // 懒打开文件
+            if (!fileOpened) {
+                std::string fname;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    fname = filename_;
+                }
+                file.open(fname, std::ios::app);
+                fileOpened = file.is_open();
+                if (!fileOpened) {
+                    // 回退到 stderr
+                    for (const auto& entry : *flushBuffer_) {
+                        formatEntry(std::cerr, entry);
+                    }
+                    std::cerr.flush();
+                    flushBuffer_->clear();
+                    continue;
+                }
             }
             
             // 写入文件（无锁）
@@ -138,21 +168,26 @@ private:
              << entry.message << '\n';
     }
     
+    // 线程安全的时间戳生成
     std::string getTimestamp() {
         auto now = std::chrono::system_clock::now();
         auto tt = std::chrono::system_clock::to_time_t(now);
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now.time_since_epoch()) % 1000;
         
+        // 使用 localtime_r（POSIX 线程安全版本）
+        struct tm tm_result;
+        localtime_r(&tt, &tm_result);
+        
         char buf[32];
-        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&tt));
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_result);
         
         return std::string(buf) + '.' + std::to_string(ms.count());
     }
     
     static constexpr size_t kFlushThreshold = 1000;
     
-    LogLevel level_;
+    std::atomic<LogLevel> level_;  // 原子变量，线程安全
     std::string filename_ = "/tmp/mymuduo.log";
     std::atomic<bool> running_;
     
@@ -161,7 +196,7 @@ private:
     std::vector<LogEntry>* currentBuffer_;
     std::vector<LogEntry>* flushBuffer_;
     
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::thread writerThread_;
 };

@@ -1,4 +1,4 @@
-// RpcServerPb.h - Protobuf RPC 服务端
+// RpcServerPb.h - Protobuf RPC 服务端（修复版）
 #pragma once
 
 #include "../TcpServer.h"
@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <functional>
 #include <memory>
+#include <mutex>
 
 // Protobuf 方法类型
 using PbMethod = std::function<void(const google::protobuf::Message&, google::protobuf::Message&)>;
@@ -15,6 +16,9 @@ using PbMethod = std::function<void(const google::protobuf::Message&, google::pr
 // Protobuf RPC 服务端
 class RpcServerPb {
 public:
+    // 最大帧大小（防止恶意大包）
+    static constexpr size_t kMaxFrameSize = 10 * 1024 * 1024;  // 10MB
+    
     RpcServerPb(EventLoop* loop, const InetAddress& addr)
         : server_(loop, addr, "RpcServerPb")
     {
@@ -28,12 +32,13 @@ public:
     void setThreadNum(int num) { server_.setThreadNum(num); }
     void start() { server_.start(); }
     
-    // 注册方法
-    // T1: 请求类型, T2: 响应类型
+    // 注册方法（线程安全）
     template<typename T1, typename T2>
     void registerMethod(const std::string& serviceName, const std::string& methodName,
                         std::function<void(const T1&, T2&)> handler) {
         std::string key = serviceName + "." + methodName;
+        
+        std::lock_guard<std::mutex> lock(mutex_);
         methods_[key] = [handler](const google::protobuf::Message& req, google::protobuf::Message& resp) {
             handler(static_cast<const T1&>(req), static_cast<T2&>(resp));
         };
@@ -47,24 +52,44 @@ public:
 
 private:
     TcpServer server_;
+    
     std::unordered_map<std::string, PbMethod> methods_;
     std::unordered_map<std::string, std::function<std::unique_ptr<google::protobuf::Message>()>> requestCreators_;
     std::unordered_map<std::string, std::function<std::unique_ptr<google::protobuf::Message>()>> responseCreators_;
     
+    mutable std::mutex mutex_;  // 保护方法注册表
+    
     void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp time) {
-        // 读取消息长度 (4 bytes)
-        if (buf->readableBytes() < 4) return;
-        
-        int32_t len = 0;
-        memcpy(&len, buf->peek(), 4);
-        len = ntohl(len);
-        
-        if (buf->readableBytes() < 4 + len) return;
-        
-        buf->retrieve(4);
-        std::string data(buf->peek(), len);
-        buf->retrieve(len);
-        
+        // 循环处理粘包
+        while (buf->readableBytes() >= 4) {
+            // 读取消息长度 (4 bytes)
+            int32_t len = 0;
+            memcpy(&len, buf->peek(), 4);
+            len = ntohl(len);
+            
+            // 安全校验：帧长度
+            if (len <= 0 || static_cast<size_t>(len) > kMaxFrameSize) {
+                sendError(conn, 0, -32600, "Invalid frame size");
+                conn->shutdown();
+                return;
+            }
+            
+            // 检查是否接收完整
+            if (buf->readableBytes() < 4 + static_cast<size_t>(len)) {
+                return;  // 等待更多数据
+            }
+            
+            // 消费长度字段和数据
+            buf->retrieve(4);
+            std::string data(buf->peek(), len);
+            buf->retrieve(len);
+            
+            // 处理单条消息
+            processMessage(conn, data);
+        }
+    }
+    
+    void processMessage(const TcpConnectionPtr& conn, const std::string& data) {
         // 解析请求
         rpc::RpcRequest request;
         if (!request.ParseFromString(data)) {
@@ -72,20 +97,34 @@ private:
             return;
         }
         
-        // 查找方法
+        // 查找方法（加锁）
         std::string key = request.service() + "." + request.method();
-        auto methodIt = methods_.find(key);
-        auto reqIt = requestCreators_.find(key);
-        auto respIt = responseCreators_.find(key);
         
-        if (methodIt == methods_.end()) {
-            sendError(conn, request.id(), -32601, "Method not found: " + key);
-            return;
+        PbMethod method;
+        std::unique_ptr<google::protobuf::Message> reqMsg;
+        std::unique_ptr<google::protobuf::Message> respMsg;
+        
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            
+            auto methodIt = methods_.find(key);
+            if (methodIt == methods_.end()) {
+                sendError(conn, request.id(), -32601, "Method not found: " + key);
+                return;
+            }
+            
+            auto reqIt = requestCreators_.find(key);
+            auto respIt = responseCreators_.find(key);
+            
+            if (reqIt == requestCreators_.end() || respIt == responseCreators_.end()) {
+                sendError(conn, request.id(), -32603, "Internal error");
+                return;
+            }
+            
+            method = methodIt->second;
+            reqMsg = reqIt->second();
+            respMsg = respIt->second();
         }
-        
-        // 创建请求和响应对象
-        auto reqMsg = reqIt->second();
-        auto respMsg = respIt->second();
         
         // 解析参数
         if (!reqMsg->ParseFromString(request.params())) {
@@ -95,9 +134,12 @@ private:
         
         // 调用方法
         try {
-            methodIt->second(*reqMsg, *respMsg);
+            method(*reqMsg, *respMsg);
         } catch (const std::exception& e) {
-            sendError(conn, request.id(), -32603, e.what());
+            sendError(conn, request.id(), -32603, std::string("Internal error: ") + e.what());
+            return;
+        } catch (...) {
+            sendError(conn, request.id(), -32603, "Unknown internal error");
             return;
         }
         

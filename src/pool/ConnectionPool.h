@@ -1,4 +1,4 @@
-// ConnectionPool.h - TCP 连接池
+// ConnectionPool.h - TCP 连接池（修复版）
 #pragma once
 
 #include <vector>
@@ -38,17 +38,14 @@ public:
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
     
-    // 发送数据
     ssize_t send(const void* buf, size_t len) {
         return ::send(fd_, buf, len, MSG_NOSIGNAL);
     }
     
-    // 接收数据
     ssize_t recv(void* buf, size_t len) {
         return ::recv(fd_, buf, len, 0);
     }
     
-    // 设置非阻塞
     void setNonBlocking() {
         int flags = fcntl(fd_, F_GETFL, 0);
         fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
@@ -61,11 +58,9 @@ private:
     int64_t lastUsed_;
 };
 
-// 连接池
+// 连接池（线程安全版）
 class ConnectionPool {
 public:
-    using CreateCallback = std::function<int(const std::string&, int)>;
-    
     ConnectionPool(const std::string& host, int port,
                    size_t minSize = 5, size_t maxSize = 20)
         : host_(host)
@@ -73,20 +68,35 @@ public:
         , minSize_(minSize)
         , maxSize_(maxSize)
         , totalCreated_(0)
-        , running_(true)
+        , closed_(false)
     {
-        // 预创建连接
+        // 预创建连接（在锁外创建）
+        std::vector<Connection::Ptr> initialConns;
         for (size_t i = 0; i < minSize; ++i) {
             int fd = createConnection(host, port);
             if (fd >= 0) {
-                pool_.push(std::make_shared<Connection>(fd, host, port));
-                totalCreated_++;
+                initialConns.push_back(std::make_shared<Connection>(fd, host, port));
             }
         }
+        
+        // 一次性加入池中
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& conn : initialConns) {
+            pool_.push(conn);
+        }
+        totalCreated_ = initialConns.size();
     }
     
     ~ConnectionPool() {
-        running_ = false;
+        // 安全关闭
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closed_ = true;
+        }
+        cv_.notify_all();  // 唤醒所有等待的线程
+        
+        // 清空连接
+        std::lock_guard<std::mutex> lock(mutex_);
         while (!pool_.empty()) {
             pool_.pop();
         }
@@ -96,25 +106,34 @@ public:
     Connection::Ptr acquire(int timeoutMs = 5000) {
         std::unique_lock<std::mutex> lock(mutex_);
         
-        // 等待可用连接
-        if (cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-            [this] { return !pool_.empty() || totalCreated_ < maxSize_; })) {
+        // 等待可用连接或池未满
+        bool success = cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+            [this] { return closed_ || !pool_.empty() || totalCreated_ < maxSize_; });
+        
+        if (closed_) return nullptr;
+        
+        // 复用现有连接
+        if (!pool_.empty()) {
+            auto conn = pool_.front();
+            pool_.pop();
+            conn->markUsed();
+            return conn;
+        }
+        
+        // 创建新连接（在锁外执行，避免阻塞）
+        if (totalCreated_ < maxSize_) {
+            totalCreated_++;  // 先占位，防止超过上限
+            lock.unlock();
             
-            if (!pool_.empty()) {
-                auto conn = pool_.front();
-                pool_.pop();
-                conn->markUsed();
-                return conn;
+            int fd = createConnection(host_, port_);
+            
+            lock.lock();
+            if (fd < 0) {
+                totalCreated_--;  // 创建失败，回退计数
+                return nullptr;
             }
             
-            // 创建新连接
-            if (totalCreated_ < maxSize_) {
-                int fd = createConnection(host_, port_);
-                if (fd >= 0) {
-                    totalCreated_++;
-                    return std::make_shared<Connection>(fd, host_, port_);
-                }
-            }
+            return std::make_shared<Connection>(fd, host_, port_);
         }
         
         return nullptr;
@@ -122,17 +141,23 @@ public:
     
     // 归还连接
     void release(Connection::Ptr conn) {
-        if (!conn || !conn->valid()) {
-            totalCreated_--;
+        if (!conn) return;
+        
+        if (!conn->valid()) {
+            // 无效连接，减少计数
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (totalCreated_ > 0) totalCreated_--;
+            cv_.notify_one();
             return;
         }
         
         std::lock_guard<std::mutex> lock(mutex_);
         
-        if (running_ && pool_.size() < maxSize_) {
-            pool_.push(conn);
+        if (closed_ || pool_.size() >= maxSize_) {
+            // 池已关闭或已满，丢弃连接
+            if (totalCreated_ > 0) totalCreated_--;
         } else {
-            totalCreated_--;
+            pool_.push(conn);
         }
         
         cv_.notify_one();
@@ -141,6 +166,8 @@ public:
     // 健康检查（清理空闲连接）
     void healthCheck() {
         std::lock_guard<std::mutex> lock(mutex_);
+        
+        if (closed_) return;
         
         int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -153,7 +180,7 @@ public:
             
             // 清理超过 60 秒未使用的连接，但保留 minSize 个
             if (now - conn->lastUsed() > 60 && valid.size() >= minSize_) {
-                totalCreated_--;
+                if (totalCreated_ > 0) totalCreated_--;
             } else {
                 valid.push(conn);
             }
@@ -167,22 +194,64 @@ public:
         return pool_.size();
     }
     
-    size_t totalCreated() const { return totalCreated_; }
+    size_t totalCreated() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return totalCreated_;
+    }
+    
+    bool isClosed() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return closed_;
+    }
 
 private:
     int createConnection(const std::string& host, int port) {
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) return -1;
         
+        // 设置非阻塞
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        
         sockaddr_in addr;
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
         
+        // 非阻塞 connect
         if (connect(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
-            close(fd);
-            return -1;
+            if (errno != EINPROGRESS) {
+                close(fd);
+                return -1;
+            }
+            
+            // 等待连接完成（带超时）
+            fd_set writefds;
+            FD_ZERO(&writefds);
+            FD_SET(fd, &writefds);
+            
+            struct timeval tv;
+            tv.tv_sec = 5;  // 5 秒超时
+            tv.tv_usec = 0;
+            
+            int result = select(fd + 1, nullptr, &writefds, nullptr, &tv);
+            if (result <= 0) {
+                close(fd);
+                return -1;
+            }
+            
+            // 检查连接是否成功
+            int error = 0;
+            socklen_t len = sizeof(error);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len);
+            if (error != 0) {
+                close(fd);
+                return -1;
+            }
         }
+        
+        // 恢复阻塞模式
+        fcntl(fd, F_SETFL, flags);
         
         return fd;
     }
@@ -191,8 +260,8 @@ private:
     int port_;
     size_t minSize_;
     size_t maxSize_;
-    std::atomic<size_t> totalCreated_;
-    std::atomic<bool> running_;
+    size_t totalCreated_;  // 在锁内操作，不需要 atomic
+    bool closed_;
     
     std::queue<Connection::Ptr> pool_;
     mutable std::mutex mutex_;
