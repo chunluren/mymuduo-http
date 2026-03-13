@@ -11,6 +11,8 @@
 #include <sstream>
 #include <chrono>
 #include <ctime>
+#include <iostream>
+#include <cstdarg>
 
 // 日志级别
 enum class LogLevel {
@@ -159,7 +161,7 @@ private:
         }
     }
     
-    void formatEntry(std::ofstream& file, const LogEntry& entry) {
+    void formatEntry(std::ostream& file, const LogEntry& entry) {
         const char* levelStr[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
         
         file << '[' << entry.timestamp << "] "

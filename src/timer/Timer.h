@@ -29,6 +29,8 @@ public:
     int64_t expiration() const { return expiration_; }
     bool repeat() const { return repeat_; }
     int64_t id() const { return id_; }
+    int64_t interval() const { return interval_; }
+    bool isCancelled() const { return cancelled_; }
     
     void restart(int64_t now) {
         if (repeat_) {

@@ -114,7 +114,15 @@ private:
             }
             
             // 检查请求体大小
-            if (request.contentLength() > kMaxBodySize) {
+            size_t contentLen = 0;
+            try {
+                contentLen = request.contentLength();
+            } catch (...) {
+                // Content-Length 解析失败，忽略
+                contentLen = 0;
+            }
+            
+            if (contentLen > kMaxBodySize) {
                 HttpResponse resp = HttpResponse::badRequest("Request body too large");
                 resp.closeConnection = true;
                 conn->send(resp.toString());
