@@ -15,7 +15,6 @@ public:
         : buckets_(buckets)
         , tickMs_(tickMs)
         , currentBucket_(0)
-        , nextTimerId_(0)
     {
         wheel_.resize(buckets);
     }
@@ -108,7 +107,6 @@ private:
     size_t buckets_;
     int tickMs_;
     size_t currentBucket_;
-    int64_t nextTimerId_;
     
     std::vector<std::list<std::shared_ptr<Timer>>> wheel_;
     std::unordered_map<int64_t, std::shared_ptr<Timer>> timers_;
