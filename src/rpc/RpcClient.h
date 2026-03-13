@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <netdb.h>
+#include <future>
 
 using json = nlohmann::json;
 

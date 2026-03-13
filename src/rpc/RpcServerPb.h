@@ -3,7 +3,7 @@
 
 #include "../TcpServer.h"
 #include "../Buffer.h"
-#include "proto/rpc.pb.h"
+#include "rpc.pb.h"
 #include <google/protobuf/message.h>
 #include <unordered_map>
 #include <functional>

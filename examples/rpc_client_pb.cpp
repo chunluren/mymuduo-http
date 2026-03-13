@@ -1,6 +1,6 @@
 // Protobuf RPC 客户端示例
 #include "RpcClientPb.h"
-#include "proto/rpc.pb.h"
+#include "rpc.pb.h"
 #include <iostream>
 
 int main() {

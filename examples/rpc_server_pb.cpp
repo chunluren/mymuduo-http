@@ -1,6 +1,6 @@
 // Protobuf RPC 服务器示例
 #include "RpcServerPb.h"
-#include "proto/rpc.pb.h"
+#include "rpc.pb.h"
 #include <iostream>
 
 class UserServicePb {

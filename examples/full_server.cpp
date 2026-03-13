@@ -98,8 +98,9 @@ int main(int argc, char* argv[]) {
     });
     
     // 8. 添加定时任务（每分钟打印状态）
-    timerQueue.addTimer([]() {
-        LOG_INFO("Server running, port: %d", port);
+    int port_for_timer = port;
+    timerQueue.addTimer([port_for_timer]() {
+        LOG_INFO("Server running, port: %d", port_for_timer);
     }, 60000, 60000);  // 60秒后开始，每60秒
     
     // 9. 启动服务器

@@ -1,0 +1,1 @@
+/usr/bin/c++  -Wall -O2 CMakeFiles/rpc_client_pb.dir/examples/rpc_client_pb.cpp.o -o rpc_client_pb  -Wl,-rpath,/home/ly/.openclaw/workspace/mymuduo-http/build_test:/usr/local/lib libmymuduo.so librpc_proto.a /usr/local/lib/libprotobuf.so -lpthread 

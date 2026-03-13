@@ -296,7 +296,11 @@ private:
         }
         
         std::string content(size, '\0');
-        fread(&content[0], 1, size, fp);
+        size_t read_size = fread(&content[0], 1, size, fp);
+        if (read_size != static_cast<size_t>(size)) {
+            response = HttpResponse::serverError("File read error");
+            return;
+        }
         
         // 设置 Content-Type
         if (filename.find(".html") != std::string::npos) {

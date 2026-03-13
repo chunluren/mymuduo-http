@@ -1,7 +1,7 @@
 // RpcClientPb.h - Protobuf RPC 客户端
 #pragma once
 
-#include "proto/rpc.pb.h"
+#include "rpc.pb.h"
 #include <google/protobuf/message.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
