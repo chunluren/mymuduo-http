@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package rpc;
+
+// RPC 请求
+message RpcRequest {
+    string service = 1;    // 服务名
+    string method = 2;     // 方法名
+    bytes params = 3;      // 参数（序列化后的 protobuf）
+    int64 id = 4;          // 请求 ID
+}
+
+// RPC 响应
+message RpcResponse {
+    int64 id = 1;          // 请求 ID
+    bytes result = 2;      // 结果（序列化后的 protobuf）
+    int32 code = 3;        // 错误码
+    string message = 4;    // 错误信息
+}
+
+// 示例服务：用户服务
+message GetUserRequest {
+    int32 id = 1;
+}
+
+message GetUserResponse {
+    int32 id = 1;
+    string name = 2;
+    string email = 3;
+}
+
+message ListUsersRequest {
+    int32 limit = 1;
+}
+
+message ListUsersResponse {
+    repeated GetUserResponse users = 1;
+}
+
+// 示例服务：计算器
+message CalcRequest {
+    double a = 1;
+    double b = 2;
+}
+
+message CalcResponse {
+    double result = 1;
+}
