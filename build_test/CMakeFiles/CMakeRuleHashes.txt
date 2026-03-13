@@ -1,2 +1,0 @@
-# Hashes of file build rules.
-405f031a894519d1a2f7b34a86b2b1f2 rpc.pb.cc
