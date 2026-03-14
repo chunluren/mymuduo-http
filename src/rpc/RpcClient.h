@@ -3,6 +3,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <atomic>
 #include <nlohmann/json.hpp>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -61,8 +62,14 @@ public:
         }
         
         std::string respBody = response.substr(bodyStart + 4);
-        json resp = json::parse(respBody);
-        
+
+        json resp;
+        try {
+            resp = json::parse(respBody);
+        } catch (const json::parse_error& e) {
+            return {{"error", "JSON parse error"}};
+        }
+
         if (resp.contains("error")) {
             return resp["error"];
         }
@@ -80,7 +87,7 @@ public:
 private:
     std::string host_;
     int port_;
-    int nextId_;
+    std::atomic<int> nextId_;
     
     int connect() {
         int sock = socket(AF_INET, SOCK_STREAM, 0);

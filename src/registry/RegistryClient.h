@@ -52,7 +52,11 @@ public:
         memset(&serverAddr, 0, sizeof(serverAddr));
         serverAddr.sin_family = AF_INET;
         serverAddr.sin_port = htons(port);
-        inet_pton(AF_INET, host.c_str(), &serverAddr.sin_addr);
+        if (inet_pton(AF_INET, host.c_str(), &serverAddr.sin_addr) <= 0) {
+            close(sockfd);
+            resp.body = "Invalid address";
+            return resp;
+        }
 
         if (connect(sockfd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
             close(sockfd);
@@ -69,11 +73,19 @@ public:
         request += "\r\n";
         request += body;
 
-        // 发送请求
-        if (send(sockfd, request.c_str(), request.size(), 0) < 0) {
-            close(sockfd);
-            resp.body = "Send failed";
-            return resp;
+        // 发送请求（循环处理部分发送）
+        size_t totalSent = 0;
+        while (totalSent < request.size()) {
+            ssize_t sent = ::send(sockfd, request.c_str() + totalSent,
+                                   request.size() - totalSent, 0);
+            if (sent < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                close(sockfd);
+                resp.body = "Send failed";
+                return resp;
+            }
+            totalSent += sent;
         }
 
         // 接收响应
@@ -128,7 +140,11 @@ public:
         memset(&serverAddr, 0, sizeof(serverAddr));
         serverAddr.sin_family = AF_INET;
         serverAddr.sin_port = htons(port);
-        inet_pton(AF_INET, host.c_str(), &serverAddr.sin_addr);
+        if (inet_pton(AF_INET, host.c_str(), &serverAddr.sin_addr) <= 0) {
+            close(sockfd);
+            resp.body = "Invalid address";
+            return resp;
+        }
 
         if (connect(sockfd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
             close(sockfd);
@@ -141,10 +157,19 @@ public:
         request += "Connection: close\r\n";
         request += "\r\n";
 
-        if (send(sockfd, request.c_str(), request.size(), 0) < 0) {
-            close(sockfd);
-            resp.body = "Send failed";
-            return resp;
+        // 发送请求（循环处理部分发送）
+        size_t totalSent = 0;
+        while (totalSent < request.size()) {
+            ssize_t sent = ::send(sockfd, request.c_str() + totalSent,
+                                   request.size() - totalSent, 0);
+            if (sent < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                close(sockfd);
+                resp.body = "Send failed";
+                return resp;
+            }
+            totalSent += sent;
         }
 
         char buffer[4096];

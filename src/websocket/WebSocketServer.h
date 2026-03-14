@@ -308,6 +308,12 @@ private:
             // 处理帧
             const WebSocketFrame& frame = result.frame;
 
+            // RFC 6455: 客户端发送的帧必须设置 mask
+            if (!frame.mask) {
+                session->close(1002, "Protocol error: unmasked client frame");
+                return;
+            }
+
             // 检查消息大小
             if (frame.payloadSize() > static_cast<size_t>(config_.maxMessageSize)) {
                 session->handleError("Message too large");

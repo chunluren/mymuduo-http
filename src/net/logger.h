@@ -2,6 +2,7 @@
 
 #include"noncopyable.h"
 #include<string>
+#include<atomic>
 //logmsgFormat,arg1,arg2,arg3...
 //宏定义换行要加\，后面不能接空格
 #define LOG_INFO(logmsgFormat, ...)\
@@ -71,6 +72,6 @@ public:
     //写日志
     void log(std::string msg);
 private:
-    int logLevel_;
-    Logger(){}
+    std::atomic<int> logLevel_;
+    Logger() : logLevel_(INFO) {}
 };
