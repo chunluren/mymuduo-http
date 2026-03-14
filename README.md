@@ -18,6 +18,7 @@
 - ✅ **连接池** - 复用 TCP 连接，减少开销
 - ✅ **信号处理** - 优雅退出，忽略 SIGPIPE
 - ✅ **配置管理** - INI 格式配置文件
+- ✅ **负载均衡** - 多种策略：轮询、加权轮询、最小连接数、一致性哈希
 
 ## 项目结构
 
@@ -29,9 +30,12 @@ mymuduo-http/
 │   ├── timer/          # 定时器
 │   ├── asynclogger/    # 异步日志
 │   ├── pool/           # 连接池
+│   ├── balancer/       # 负载均衡
 │   ├── util/           # 工具类
 │   └── config/         # 配置管理
 ├── examples/           # 示例代码
+├── benchmark/          # 性能压测
+├── tests/              # 单元测试
 ├── config/             # 配置文件
 └── CMakeLists.txt
 ```
@@ -252,6 +256,57 @@ int port = CONFIG_INT("server.port");
 - JSON-RPC QPS: ~15,000+
 - **Protobuf-RPC QPS: ~50,000+** (二进制协议更快)
 - 定时器: O(1) 插入/删除
+
+## 负载均衡
+
+支持多种负载均衡策略，可用于客户端请求分发：
+
+```cpp
+#include "balancer/LoadBalancer.h"
+
+// 创建负载均衡器
+LoadBalancer lb(LoadBalancer::Strategy::WeightedRoundRobin);
+
+// 添加后端服务器（host, port, weight）
+lb.addServer("192.168.1.1", 8080, 5);  // 权重 5
+lb.addServer("192.168.1.2", 8080, 3);  // 权重 3
+lb.addServer("192.168.1.3", 8080, 2);  // 权重 2
+
+// 选择服务器
+auto server = lb.select();
+std::cout << "Selected: " << server->address() << std::endl;
+
+// 释放连接（最小连接数策略）
+lb.releaseConnection(server);
+```
+
+### 策略说明
+
+| 策略 | 说明 | 适用场景 |
+|------|------|---------|
+| RoundRobin | 轮询 | 服务器性能相近 |
+| WeightedRoundRobin | 平滑加权轮询 | 服务器性能不均 |
+| LeastConnections | 最小连接数 | 长连接场景 |
+| Random | 随机选择 | 简单场景 |
+| ConsistentHash | 一致性哈希 | 缓存场景 |
+
+## 性能压测
+
+项目提供多种压测工具：
+
+```bash
+# 方法 1: 使用 shell 脚本
+./benchmark/run_benchmark.sh --threads 4 --requests 1000
+
+# 方法 2: 使用 Python 脚本
+python3 benchmark/benchmark.py --type all --concurrency 100 --requests 10000
+
+# 方法 3: 使用 C++ 客户端
+./benchmark_client --type http --port 8080 --threads 4 --requests 1000
+./benchmark_client --type rpc --port 8081 --threads 4 --requests 1000
+```
+
+详细报告见 [benchmark/report.md](benchmark/report.md)
 
 ## 技术栈
 

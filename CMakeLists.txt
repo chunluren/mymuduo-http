@@ -49,6 +49,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pool
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     ${CMAKE_CURRENT_SOURCE_DIR}/src/config
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/balancer
     ${CMAKE_CURRENT_BINARY_DIR}
     ${Protobuf_INCLUDE_DIRS}
 )
@@ -76,6 +77,18 @@ target_link_libraries(rpc_client_pb mymuduo rpc_proto ${Protobuf_LIBRARIES} pthr
 # Full Server
 add_executable(full_server examples/full_server.cpp)
 target_link_libraries(full_server mymuduo nlohmann_json::nlohmann_json pthread)
+
+# Benchmark Client
+add_executable(benchmark_client benchmark/benchmark_client.cpp)
+target_link_libraries(benchmark_client pthread)
+
+# 测试
+file(GLOB TEST_SOURCES tests/*.cpp)
+foreach(TEST_FILE ${TEST_SOURCES})
+    get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
+    add_executable(${TEST_NAME} ${TEST_FILE})
+    target_link_libraries(${TEST_NAME} mymuduo nlohmann_json::nlohmann_json pthread)
+endforeach()
 
 # 安装
 install(TARGETS mymuduo rpc_proto LIBRARY DESTINATION lib)
