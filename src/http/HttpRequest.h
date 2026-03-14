@@ -78,8 +78,9 @@ public:
             value = value.substr(start);
         }
         
-        // 转小写
-        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+        // 转小写（正确处理负值 char）
+        std::transform(key.begin(), key.end(), key.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         headers[key] = value;
         
         return true;
@@ -88,7 +89,8 @@ public:
     // 获取 header
     std::string getHeader(const std::string& key) const {
         std::string lower_key = key;
-        std::transform(lower_key.begin(), lower_key.end(), lower_key.begin(), ::tolower);
+        std::transform(lower_key.begin(), lower_key.end(), lower_key.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         auto it = headers.find(lower_key);
         return it != headers.end() ? it->second : "";
     }

@@ -290,6 +290,7 @@ public:
 
     // 释放连接（用于最小连接数策略）
     void releaseConnection(BackendServerPtr server) {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (auto lc = dynamic_cast<LeastConnectionsStrategy*>(strategyImpl_.get())) {
             lc->release(server);
         }
@@ -314,6 +315,7 @@ public:
 
     // 获取策略名称
     std::string strategyName() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         return strategyImpl_->name();
     }
 
