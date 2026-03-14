@@ -1,12 +1,13 @@
 #include "Socket.h"
 #include "logger.h"
-#include "InetAddress.h" 
+#include "InetAddress.h"
 
 #include<unistd.h>
 #include <sys/types.h>          /* See NOTES */
 #include <sys/socket.h>
 #include <strings.h>
 #include <netinet/tcp.h>
+#include <fcntl.h>
 
 Socket::~Socket()
 {
@@ -38,6 +39,11 @@ int Socket::accept(InetAddress *peeraddr)
     if (connfd >= 0)
     {
         peeraddr->setSockAddr(addr);
+        // 设置非阻塞
+        int flags = ::fcntl(connfd, F_GETFL, 0);
+        if (flags >= 0) {
+            ::fcntl(connfd, F_SETFL, flags | O_NONBLOCK);
+        }
     }
     return connfd;
 }

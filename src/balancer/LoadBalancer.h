@@ -266,11 +266,13 @@ public:
 
     // 添加后端服务器
     void addServer(const std::string& host, int port, int weight = 1) {
+        std::lock_guard<std::mutex> lock(mutex_);
         servers_.push_back(std::make_shared<BackendServer>(host, port, weight));
     }
 
     // 移除后端服务器
     void removeServer(const std::string& host, int port) {
+        std::lock_guard<std::mutex> lock(mutex_);
         servers_.erase(
             std::remove_if(servers_.begin(), servers_.end(),
                 [&](const BackendServerPtr& s) {
@@ -282,6 +284,7 @@ public:
 
     // 选择服务器
     BackendServerPtr select() {
+        std::lock_guard<std::mutex> lock(mutex_);
         return strategyImpl_->select(servers_);
     }
 
@@ -294,6 +297,7 @@ public:
 
     // 设置服务器健康状态
     void setServerHealth(const std::string& host, int port, bool healthy) {
+        std::lock_guard<std::mutex> lock(mutex_);
         for (auto& s : servers_) {
             if (s->host == host && s->port == port) {
                 s->healthy = healthy;
@@ -302,8 +306,9 @@ public:
         }
     }
 
-    // 获取所有服务器
-    const std::vector<BackendServerPtr>& servers() const {
+    // 获取所有服务器（返回拷贝，线程安全）
+    std::vector<BackendServerPtr> servers() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         return servers_;
     }
 
@@ -336,4 +341,5 @@ private:
     Strategy strategyType_;
     std::unique_ptr<ILoadBalanceStrategy> strategyImpl_;
     std::vector<BackendServerPtr> servers_;
+    mutable std::mutex mutex_;  // 保护 servers_
 };

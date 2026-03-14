@@ -104,7 +104,12 @@ public:
     // 获取 Content-Length
     size_t contentLength() const {
         std::string len = getHeader("content-length");
-        return len.empty() ? 0 : std::stoul(len);
+        if (len.empty()) return 0;
+        try {
+            return std::stoul(len);
+        } catch (...) {
+            return 0;
+        }
     }
 
 private:

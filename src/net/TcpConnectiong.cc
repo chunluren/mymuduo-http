@@ -172,8 +172,11 @@ void TcpConnection::send(const std::string& message)
         }
         else
         {
+            // 按值捕获 message 和 shared_from_this()，避免悬空指针
             loop_->runInLoop(
-                std::bind(&TcpConnection::sendInLoop, this, message.c_str(), message.size())
+                [self = shared_from_this(), msg = message]() {
+                    self->sendInLoop(msg.c_str(), msg.size());
+                }
             );
         }
     }
@@ -184,8 +187,11 @@ void TcpConnection::shutdown()
     if(state_ == kConnected)
     {
         setState(kDisconnecting);
+        // 捕获 shared_from_this()，避免 UAF
         loop_->runInLoop(
-            std::bind(&TcpConnection::shutdownInLoop, this)
+            [self = shared_from_this()]() {
+                self->shutdownInLoop();
+            }
         );
     }
 }

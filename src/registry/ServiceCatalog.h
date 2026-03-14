@@ -25,8 +25,8 @@ public:
         // 检查是否已存在相同实例ID
         for (auto& inst : instances) {
             if (inst->instanceId == instance->instanceId) {
-                // 更新心跳
-                *inst = *instance;
+                // 替换整个 shared_ptr，避免数据竞争
+                inst = instance;
                 inst->heartbeat();
                 return true;
             }

@@ -69,7 +69,7 @@ private:
     ThreadInitCallback threadInitCallback_; // loop线程初始化的回调
 
     int nextConnId_;
-    std::atomic_int started_;
+    std::atomic_int started_{0};
 
     ConnectionMap connections_; // 保存所有的连接
 };
