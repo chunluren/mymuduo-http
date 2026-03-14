@@ -1,5 +1,30 @@
-// WebSocketFrame.h - WebSocket 帧定义和编解码
-// 实现 RFC 6455 WebSocket 协议
+/**
+ * @file WebSocketFrame.h
+ * @brief WebSocket 帧定义和编解码
+ *
+ * 本文件实现了 RFC 6455 WebSocket 协议的帧编解码。
+ * 支持:
+ * - 文本帧、二进制帧
+ * - Ping/Pong 心跳
+ * - 关闭帧
+ * - 掩码处理
+ *
+ * @example 使用示例
+ * @code
+ * // 编码文本帧
+ * auto data = WebSocketFrameCodec::encodeText("Hello World");
+ *
+ * // 编码二进制帧
+ * std::vector<uint8_t> binaryData = {0x01, 0x02, 0x03};
+ * auto data = WebSocketFrameCodec::encodeBinary(binaryData);
+ *
+ * // 解码帧
+ * auto result = WebSocketFrameCodec::decode(buffer, length);
+ * if (result.status == DecodeResult::Ok) {
+ *     std::string text = result.frame.textPayload();
+ * }
+ * @endcode
+ */
 
 #pragma once
 
@@ -11,26 +36,34 @@
 #include <sstream>
 #include <iomanip>
 
-// WebSocket 操作码
+/**
+ * @enum WsOpcode
+ * @brief WebSocket 操作码
+ */
 enum class WsOpcode : uint8_t {
-    Continuation = 0x0,  // 继续帧
-    Text = 0x1,          // 文本帧
-    Binary = 0x2,        // 二进制帧
-    Close = 0x8,         // 关闭帧
-    Ping = 0x9,          // Ping
-    Pong = 0xA,          // Pong
+    Continuation = 0x0,  ///< 继续帧 (分片消息)
+    Text = 0x1,          ///< 文本帧
+    Binary = 0x2,       ///< 二进制帧
+    Close = 0x8,        ///< 关闭帧
+    Ping = 0x9,         ///< Ping (心跳请求)
+    Pong = 0xA,         ///< Pong (心跳响应)
 };
 
-// WebSocket 帧
+/**
+ * @struct WebSocketFrame
+ * @brief WebSocket 帧结构
+ *
+ * 存储一个 WebSocket 帧的所有信息
+ */
 struct WebSocketFrame {
-    bool fin;             // 是否为最后一帧
-    uint8_t rsv1;         // 保留位 1
-    uint8_t rsv2;         // 保留位 2
-    uint8_t rsv3;         // 保留位 3
-    WsOpcode opcode;      // 操作码
-    bool mask;            // 是否掩码
-    uint8_t maskingKey[4];// 掩码密钥
-    std::vector<uint8_t> payload;  // 负载数据
+    bool fin;                      ///< 是否为最后一帧
+    uint8_t rsv1;                  ///< 保留位 1
+    uint8_t rsv2;                  ///< 保留位 2
+    uint8_t rsv3;                  ///< 保留位 3
+    WsOpcode opcode;               ///< 操作码
+    bool mask;                     ///< 是否掩码
+    uint8_t maskingKey[4];         ///< 掩码密钥
+    std::vector<uint8_t> payload;  ///< 负载数据
 
     WebSocketFrame()
         : fin(true), rsv1(0), rsv2(0), rsv3(0),
@@ -38,58 +71,68 @@ struct WebSocketFrame {
         memset(maskingKey, 0, 4);
     }
 
-    // 判断是否为控制帧
+    /// 判断是否为控制帧
     bool isControlFrame() const {
         return static_cast<uint8_t>(opcode) >= 0x8;
     }
 
-    // 获取负载大小
+    /// 获取负载大小
     size_t payloadSize() const {
         return payload.size();
     }
 
-    // 获取文本负载
+    /// 获取文本负载
     std::string textPayload() const {
         return std::string(payload.begin(), payload.end());
     }
 
-    // 设置文本负载
+    /// 设置文本负载
     void setTextPayload(const std::string& text) {
         payload.assign(text.begin(), text.end());
         opcode = WsOpcode::Text;
     }
 
-    // 设置二进制负载
+    /// 设置二进制负载
     void setBinaryPayload(const std::vector<uint8_t>& data) {
         payload = data;
         opcode = WsOpcode::Binary;
     }
 };
 
-// WebSocket 帧编解码器
+/**
+ * @class WebSocketFrameCodec
+ * @brief WebSocket 帧编解码器
+ *
+ * 提供帧的编码和解码功能
+ */
 class WebSocketFrameCodec {
 public:
-    // 编码结果
+    /// 编码结果
     struct EncodeResult {
         bool success;
         std::string error;
         std::vector<uint8_t> data;
     };
 
-    // 解码结果
+    /// 解码结果
     struct DecodeResult {
         enum Status {
-            Ok,           // 成功
-            Incomplete,   // 数据不完整
-            Error         // 解析错误
+            Ok,          ///< 成功
+            Incomplete,  ///< 数据不完整
+            Error        ///< 解析错误
         };
         Status status;
         std::string error;
         WebSocketFrame frame;
-        size_t consumed;  // 消耗的字节数
+        size_t consumed;  ///< 消耗的字节数
     };
 
-    // 编码帧（服务器发送不需要掩码）
+    /**
+     * @brief 编码帧
+     * @param frame 要编码的帧
+     * @param mask 是否掩码 (服务器发送不需要)
+     * @return 编码后的字节数组
+     */
     static std::vector<uint8_t> encode(const WebSocketFrame& frame, bool mask = false) {
         std::vector<uint8_t> data;
 
@@ -126,7 +169,6 @@ public:
         // 掩码密钥
         uint8_t maskingKey[4] = {0};
         if (mask) {
-            // 生成随机掩码
             for (int i = 0; i < 4; ++i) {
                 maskingKey[i] = static_cast<uint8_t>(rand() % 256);
                 data.push_back(maskingKey[i]);
@@ -146,7 +188,7 @@ public:
         return data;
     }
 
-    // 快速编码文本帧
+    /// 快速编码文本帧
     static std::vector<uint8_t> encodeText(const std::string& text) {
         WebSocketFrame frame;
         frame.fin = true;
@@ -155,7 +197,7 @@ public:
         return encode(frame);
     }
 
-    // 快速编码二进制帧
+    /// 快速编码二进制帧
     static std::vector<uint8_t> encodeBinary(const std::vector<uint8_t>& data) {
         WebSocketFrame frame;
         frame.fin = true;
@@ -164,19 +206,18 @@ public:
         return encode(frame);
     }
 
-    // 快速编码关闭帧
+    /// 快速编码关闭帧
     static std::vector<uint8_t> encodeClose(uint16_t code = 1000, const std::string& reason = "") {
         WebSocketFrame frame;
         frame.fin = true;
         frame.opcode = WsOpcode::Close;
-        // 关闭帧负载: 2字节状态码 + 原因
         frame.payload.push_back(static_cast<uint8_t>((code >> 8) & 0xFF));
         frame.payload.push_back(static_cast<uint8_t>(code & 0xFF));
         frame.payload.insert(frame.payload.end(), reason.begin(), reason.end());
         return encode(frame);
     }
 
-    // 快速编码 Pong 帧
+    /// 快速编码 Pong 帧
     static std::vector<uint8_t> encodePong(const std::vector<uint8_t>& pingData = {}) {
         WebSocketFrame frame;
         frame.fin = true;
@@ -185,7 +226,7 @@ public:
         return encode(frame);
     }
 
-    // 快速编码 Ping 帧
+    /// 快速编码 Ping 帧
     static std::vector<uint8_t> encodePing(const std::vector<uint8_t>& data = {}) {
         WebSocketFrame frame;
         frame.fin = true;
@@ -194,7 +235,12 @@ public:
         return encode(frame);
     }
 
-    // 解码帧
+    /**
+     * @brief 解码帧
+     * @param data 数据指针
+     * @param len 数据长度
+     * @return 解码结果
+     */
     static DecodeResult decode(const uint8_t* data, size_t len) {
         DecodeResult result;
         result.status = DecodeResult::Error;
@@ -273,7 +319,11 @@ public:
         return result;
     }
 
-    // 计算握手 Accept Key
+    /**
+     * @brief 计算握手 Accept Key
+     * @param clientKey 客户端的 Sec-WebSocket-Key
+     * @return 服务器响应的 Sec-WebSocket-Accept
+     */
     static std::string computeAcceptKey(const std::string& clientKey) {
         const std::string GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         std::string combined = clientKey + GUID;

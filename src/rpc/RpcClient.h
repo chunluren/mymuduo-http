@@ -1,4 +1,26 @@
-// RpcClient.h - RPC 客户端
+/**
+ * @file RpcClient.h
+ * @brief JSON RPC 客户端
+ *
+ * 本文件定义了 RpcClient 类，实现 JSON-RPC 2.0 客户端。
+ * 支持同步和异步调用。
+ *
+ * @example 使用示例
+ * @code
+ * RpcClient client("127.0.0.1", 8080);
+ *
+ * // 同步调用
+ * json params = {1, 2};
+ * json result = client.call("add", params);
+ * std::cout << "Result: " << result << std::endl;
+ *
+ * // 异步调用
+ * auto future = client.asyncCall("add", params);
+ * // ... 做其他事情 ...
+ * json result = future.get();
+ * @endcode
+ */
+
 #pragma once
 
 #include <string>
@@ -14,26 +36,56 @@
 
 using json = nlohmann::json;
 
+/**
+ * @class RpcClient
+ * @brief JSON RPC 客户端
+ *
+ * 提供 JSON-RPC 2.0 客户端功能:
+ * - 同步调用 (call)
+ * - 异步调用 (asyncCall)
+ *
+ * 使用 HTTP 作为传输协议
+ */
 class RpcClient {
 public:
+    /**
+     * @brief 构造 RPC 客户端
+     * @param host 服务器主机名或 IP
+     * @param port 服务器端口
+     */
     RpcClient(const std::string& host, int port)
         : host_(host), port_(port), nextId_(1)
     {}
-    
-    // 同步调用
+
+    /**
+     * @brief 同步调用 RPC 方法
+     * @param method 方法名称
+     * @param params 参数 (可选)
+     * @return 调用结果，失败时返回 {"error", "错误信息"}
+     *
+     * @example
+     * @code
+     * json result = client.call("add", {1, 2});
+     * if (result.contains("error")) {
+     *     std::cerr << "Error: " << result["error"] << std::endl;
+     * } else {
+     *     std::cout << "Result: " << result << std::endl;
+     * }
+     * @endcode
+     */
     json call(const std::string& method, const json& params = json()) {
         int sock = connect();
         if (sock < 0) {
             return {{"error", "connection failed"}};
         }
-        
+
         // 构造请求
         json request;
         request["jsonrpc"] = "2.0";
         request["method"] = method;
         request["params"] = params;
         request["id"] = nextId_++;
-        
+
         // 发送 HTTP 请求
         std::string body = request.dump();
         std::string httpReq = "POST /rpc HTTP/1.1\r\n"
@@ -41,9 +93,9 @@ public:
                              "Content-Type: application/json\r\n"
                              "Content-Length: " + std::to_string(body.size()) + "\r\n"
                              "\r\n" + body;
-        
+
         send(sock, httpReq.c_str(), httpReq.size(), 0);
-        
+
         // 接收响应
         char buf[4096];
         std::string response;
@@ -52,15 +104,15 @@ public:
             buf[n] = '\0';
             response += buf;
         }
-        
+
         close(sock);
-        
+
         // 解析 HTTP 响应
         size_t bodyStart = response.find("\r\n\r\n");
         if (bodyStart == std::string::npos) {
             return {{"error", "invalid response"}};
         }
-        
+
         std::string respBody = response.substr(bodyStart + 4);
 
         json resp;
@@ -73,11 +125,23 @@ public:
         if (resp.contains("error")) {
             return resp["error"];
         }
-        
+
         return resp["result"];
     }
-    
-    // 异步调用（返回 future）
+
+    /**
+     * @brief 异步调用 RPC 方法
+     * @param method 方法名称
+     * @param params 参数 (可选)
+     * @return future<json>，可通过 get() 获取结果
+     *
+     * @example
+     * @code
+     * auto future = client.asyncCall("add", {1, 2});
+     * // ... 做其他事情 ...
+     * json result = future.get();
+     * @endcode
+     */
     std::future<json> asyncCall(const std::string& method, const json& params = json()) {
         return std::async(std::launch::async, [this, method, params]() {
             return call(method, params);
@@ -88,28 +152,32 @@ private:
     std::string host_;
     int port_;
     std::atomic<int> nextId_;
-    
+
+    /**
+     * @brief 建立 TCP 连接
+     * @return socket fd，-1 表示失败
+     */
     int connect() {
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) return -1;
-        
+
         // 解析主机名
         hostent* host = gethostbyname(host_.c_str());
         if (!host) {
             close(sock);
             return -1;
         }
-        
+
         sockaddr_in addr;
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port_);
         addr.sin_addr = *((in_addr*)host->h_addr);
-        
+
         if (::connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
             close(sock);
             return -1;
         }
-        
+
         return sock;
     }
 };
