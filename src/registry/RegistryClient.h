@@ -4,7 +4,7 @@
 #pragma once
 
 #include "ServiceMeta.h"
-#include "../balancer/LoadBalancer.h"
+#include "balancer/LoadBalancer.h"
 #include <string>
 #include <memory>
 #include <thread>

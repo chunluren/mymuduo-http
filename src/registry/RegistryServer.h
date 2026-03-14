@@ -6,7 +6,7 @@
 #include "ServiceMeta.h"
 #include "ServiceCatalog.h"
 #include "HealthChecker.h"
-#include "../http/HttpServer.h"
+#include "http/HttpServer.h"
 #include "../http/HttpRequest.h"
 #include "../http/HttpResponse.h"
 #include <memory>

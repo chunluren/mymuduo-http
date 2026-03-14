@@ -1,8 +1,8 @@
 // RpcServerPb.h - Protobuf RPC 服务端（修复版）
 #pragma once
 
-#include "../TcpServer.h"
-#include "../Buffer.h"
+#include "net/TcpServer.h"
+#include "net/Buffer.h"
 #include "rpc.pb.h"
 #include <google/protobuf/message.h>
 #include <unordered_map>

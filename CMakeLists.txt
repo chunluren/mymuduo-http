@@ -10,8 +10,8 @@ find_package(Protobuf REQUIRED)
 # 查找 OpenSSL（用于 WebSocket）
 find_package(OpenSSL REQUIRED)
 
-# mymuduo 库
-file(GLOB MUDUO_SOURCES "*.cc")
+# mymuduo 库（核心网络库）
+file(GLOB MUDUO_SOURCES "src/net/*.cc")
 add_library(mymuduo SHARED ${MUDUO_SOURCES})
 target_include_directories(mymuduo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -45,6 +45,7 @@ target_link_libraries(rpc_proto ${Protobuf_LIBRARIES})
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rpc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/timer

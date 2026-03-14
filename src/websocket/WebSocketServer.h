@@ -5,10 +5,10 @@
 
 #include "WebSocketFrame.h"
 #include "WsSession.h"
-#include "../../TcpServer.h"
-#include "../../EventLoop.h"
-#include "../../Buffer.h"
-#include "../../InetAddress.h"
+#include "net/TcpServer.h"
+#include "net/EventLoop.h"
+#include "net/Buffer.h"
+#include "net/InetAddress.h"
 #include <memory>
 #include <functional>
 #include <unordered_map>

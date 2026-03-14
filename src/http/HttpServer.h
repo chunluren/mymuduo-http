@@ -3,9 +3,9 @@
 
 #include "HttpRequest.h"
 #include "HttpResponse.h"
-#include "../TcpServer.h"
-#include "../EventLoop.h"
-#include "../Buffer.h"
+#include "net/TcpServer.h"
+#include "net/EventLoop.h"
+#include "net/Buffer.h"
 #include <functional>
 #include <unordered_map>
 #include <regex>

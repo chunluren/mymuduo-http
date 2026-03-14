@@ -4,8 +4,8 @@
 #pragma once
 
 #include "WebSocketFrame.h"
-#include "../../TcpConnection.h"
-#include "../../Buffer.h"
+#include "net/TcpConnection.h"
+#include "net/Buffer.h"
 #include <memory>
 #include <functional>
 #include <string>
