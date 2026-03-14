@@ -12,6 +12,9 @@
 4. [异步日志模块](#4-异步日志模块)
 5. [连接池模块](#5-连接池模块)
 6. [配置管理模块](#6-配置管理模块)
+7. [负载均衡模块](#7-负载均衡模块)
+8. [服务注册中心模块](#8-服务注册中心模块)
+9. [WebSocket 模块](#9-websocket-模块)
 
 ---
 
@@ -414,6 +417,216 @@ bool debug = CONFIG_BOOL("debug.enabled");
 
 ---
 
+## 7. 负载均衡模块
+
+### 文件结构
+```
+src/balancer/
+└── LoadBalancer.h  # 负载均衡策略
+```
+
+### 核心实现
+
+#### 7.1 策略模式设计
+
+```cpp
+// 策略接口
+class ILoadBalanceStrategy {
+public:
+    virtual BackendServerPtr select(const std::vector<BackendServerPtr>& servers) = 0;
+    virtual std::string name() const = 0;
+};
+
+// 策略工厂
+class LoadBalancer {
+    enum class Strategy {
+        RoundRobin,
+        WeightedRoundRobin,
+        LeastConnections,
+        Random,
+        ConsistentHash
+    };
+    // ...
+};
+```
+
+#### 7.2 平滑加权轮询（Nginx 算法）
+
+```cpp
+BackendServerPtr select() {
+    int totalWeight = 0;
+    BackendServerPtr selected = nullptr;
+
+    for (auto& server : servers) {
+        server->currentWeight += server->weight;
+        totalWeight += server->weight;
+
+        if (!selected || server->currentWeight > selected->currentWeight) {
+            selected = server;
+        }
+    }
+
+    selected->currentWeight -= totalWeight;
+    return selected;
+}
+```
+
+**面试亮点：**
+- 策略模式，易扩展
+- 平滑加权轮询，避免请求分布不均
+- 一致性哈希，支持缓存场景
+
+---
+
+## 8. 服务注册中心模块
+
+### 文件结构
+```
+src/registry/
+├── ServiceMeta.h      # 服务元数据
+├── ServiceCatalog.h   # 服务目录（内存索引）
+├── HealthChecker.h    # 健康检查器
+├── RegistryServer.h   # 注册中心服务器
+└── RegistryClient.h   # 客户端 SDK
+```
+
+### 核心实现
+
+#### 8.1 服务标识
+
+```cpp
+struct ServiceKey {
+    std::string namespace_;   // 命名空间
+    std::string serviceName;  // 服务名
+    std::string version;      // 版本号
+
+    std::string key() const {
+        return namespace_ + ":" + serviceName + ":" + version;
+    }
+};
+
+struct InstanceMeta {
+    std::string instanceId;
+    std::string host;
+    int port;
+    int weight;
+    int64_t lastHeartbeatMs;
+    int ttlSeconds;
+    std::string status;  // UP, DOWN
+};
+```
+
+#### 8.2 健康检查机制
+
+```cpp
+class HealthChecker {
+    void checkLoop() {
+        while (running_) {
+            checkOnce();  // 标记过期实例为 DOWN
+            cv_.wait_for(lock, std::chrono::milliseconds(checkIntervalMs_));
+        }
+    }
+};
+```
+
+#### 8.3 服务发现流程
+
+```
+服务提供者                    注册中心                    服务消费者
+    │                          │                          │
+    │──── 注册实例 ────────────▶│                          │
+    │                          │                          │
+    │──── 心跳 ───────────────▶│                          │
+    │                          │                          │
+    │                          │◀──── 发现服务 ───────────│
+    │                          │──── 返回实例列表 ────────▶│
+    │                          │                          │
+    │     (TTL 过期)           │                          │
+    │◀────────────────────── 标记 DOWN                   │
+```
+
+**面试亮点：**
+- 分布式服务发现
+- TTL 心跳机制
+- 自动健康检查
+- 与负载均衡集成
+
+---
+
+## 9. WebSocket 模块
+
+### 文件结构
+```
+src/websocket/
+├── WebSocketFrame.h     # 帧编解码
+├── WsSession.h          # 会话管理
+└── WebSocketServer.h    # WebSocket 服务器
+```
+
+### 核心实现
+
+#### 9.1 帧格式（RFC 6455）
+
+```
+  0                   1                   2                   3
+  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ +-+-+-+-+-------+-+-------------+-------------------------------+
+ |F|R|R|R| opcode|M| Payload len |    Extended payload length    |
+ |I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
+ |N|V|V|V|       |S|             |   (if payload len==126/127)   |
+ | |1|2|3|       |K|             |                               |
+ +-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
+ |     Extended payload length continued, if payload len == 127  |
+ + - - - - - - - - - - - - - - - +-------------------------------+
+ |                               |Masking-key, if MASK set to 1  |
+ +-------------------------------+-------------------------------+
+ | Masking-key (continued)       |          Payload Data         |
+ +-------------------------------- - - - - - - - - - - - - - - - +
+```
+
+#### 9.2 握手协议
+
+```cpp
+// 客户端请求
+GET /chat HTTP/1.1
+Host: server.example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+
+// 服务端响应
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+// Accept Key 计算
+acceptKey = BASE64(SHA1(clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+```
+
+#### 9.3 会话管理
+
+```cpp
+class WsSession {
+    void sendText(const std::string& text);
+    void sendBinary(const std::vector<uint8_t>& data);
+    void ping(const std::vector<uint8_t>& data = {});
+    void close(uint16_t code = 1000, const std::string& reason = "");
+
+    // 状态管理
+    enum class WsState { Connecting, Open, Closing, Closed };
+};
+```
+
+**面试亮点：**
+- 完整的 RFC 6455 实现
+- 握手协议正确性（Accept Key 计算）
+- 掩码编解码
+- 控制帧处理（Ping/Pong/Close）
+
+---
+
 ## 总结
 
 ### 项目亮点
@@ -425,6 +638,9 @@ bool debug = CONFIG_BOOL("debug.enabled");
 | 定时器 | 时间轮 O(1) | 高 |
 | 异步日志 | 双缓冲、线程安全 | 高 |
 | 连接池 | 锁外创建、生命周期 | 中 |
+| 负载均衡 | 策略模式、一致性哈希 | 高 |
+| 服务注册中心 | TTL 心跳、服务发现 | 很高 |
+| WebSocket | RFC 6455、帧编解码 | 高 |
 
 ### 技术栈
 
@@ -432,6 +648,7 @@ bool debug = CONFIG_BOOL("debug.enabled");
 - **网络：** epoll、Reactor 模式
 - **序列化：** JSON、Protobuf
 - **并发：** 多线程、mutex、atomic
+- **安全：** OpenSSL (SHA1)
 
 ---
 

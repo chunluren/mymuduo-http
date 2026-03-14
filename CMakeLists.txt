@@ -7,6 +7,9 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O2")
 # 查找 Protobuf
 find_package(Protobuf REQUIRED)
 
+# 查找 OpenSSL（用于 WebSocket）
+find_package(OpenSSL REQUIRED)
+
 # mymuduo 库
 file(GLOB MUDUO_SOURCES "*.cc")
 add_library(mymuduo SHARED ${MUDUO_SOURCES})
@@ -50,6 +53,8 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     ${CMAKE_CURRENT_SOURCE_DIR}/src/config
     ${CMAKE_CURRENT_SOURCE_DIR}/src/balancer
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/registry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket
     ${CMAKE_CURRENT_BINARY_DIR}
     ${Protobuf_INCLUDE_DIRS}
 )
@@ -78,6 +83,14 @@ target_link_libraries(rpc_client_pb mymuduo rpc_proto ${Protobuf_LIBRARIES} pthr
 add_executable(full_server examples/full_server.cpp)
 target_link_libraries(full_server mymuduo nlohmann_json::nlohmann_json pthread)
 
+# Registry Server
+add_executable(registry_server examples/registry_server.cpp)
+target_link_libraries(registry_server mymuduo nlohmann_json::nlohmann_json pthread)
+
+# WebSocket Server
+add_executable(websocket_server examples/websocket_server.cpp)
+target_link_libraries(websocket_server mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto pthread)
+
 # Benchmark Client
 add_executable(benchmark_client benchmark/benchmark_client.cpp)
 target_link_libraries(benchmark_client pthread)
@@ -87,7 +100,7 @@ file(GLOB TEST_SOURCES tests/*.cpp)
 foreach(TEST_FILE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
     add_executable(${TEST_NAME} ${TEST_FILE})
-    target_link_libraries(${TEST_NAME} mymuduo nlohmann_json::nlohmann_json pthread)
+    target_link_libraries(${TEST_NAME} mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto pthread)
 endforeach()
 
 # 安装

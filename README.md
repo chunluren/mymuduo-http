@@ -19,6 +19,8 @@
 - ✅ **信号处理** - 优雅退出，忽略 SIGPIPE
 - ✅ **配置管理** - INI 格式配置文件
 - ✅ **负载均衡** - 多种策略：轮询、加权轮询、最小连接数、一致性哈希
+- ✅ **服务注册中心** - 分布式服务发现与注册
+- ✅ **WebSocket** - RFC 6455 标准 WebSocket 服务器
 
 ## 项目结构
 
@@ -31,6 +33,8 @@ mymuduo-http/
 │   ├── asynclogger/    # 异步日志
 │   ├── pool/           # 连接池
 │   ├── balancer/       # 负载均衡
+│   ├── registry/       # 服务注册中心
+│   ├── websocket/      # WebSocket
 │   ├── util/           # 工具类
 │   └── config/         # 配置管理
 ├── examples/           # 示例代码
@@ -308,12 +312,106 @@ python3 benchmark/benchmark.py --type all --concurrency 100 --requests 10000
 
 详细报告见 [benchmark/report.md](benchmark/report.md)
 
+## 服务注册中心
+
+提供服务注册、发现、心跳和健康检查功能：
+
+### 服务端
+
+```cpp
+#include "registry/RegistryServer.h"
+
+int main() {
+    EventLoop loop;
+    RegistryServer server(&loop, InetAddress(8500));
+    server.start();
+    loop.loop();
+}
+```
+
+### 客户端 SDK
+
+```cpp
+#include "registry/RegistryClient.h"
+
+// 创建客户端
+RegistryClient client("127.0.0.1", 8500);
+
+// 注册服务
+ServiceKey key("production", "user-service", "v1.0.0");
+InstanceMeta instance("inst-001", "192.168.1.100", 8080);
+std::string instanceId;
+client.registerService(key, instance, &instanceId);
+
+// 发现服务
+auto instances = client.discoverService(key);
+for (const auto& inst : instances) {
+    std::cout << inst->address() << std::endl;
+}
+
+// 自动心跳
+client.startHeartbeat(key, instanceId);
+```
+
+### API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/registry/register` | POST | 注册服务实例 |
+| `/api/v1/registry/deregister` | POST | 注销服务实例 |
+| `/api/v1/registry/heartbeat` | POST | 发送心跳 |
+| `/api/v1/registry/discover` | GET | 发现服务 |
+| `/api/v1/registry/services` | GET | 获取所有服务 |
+| `/api/v1/registry/stats` | GET | 统计信息 |
+
+## WebSocket
+
+RFC 6455 标准的 WebSocket 服务器实现：
+
+### 服务端
+
+```cpp
+#include "websocket/WebSocketServer.h"
+
+int main() {
+    EventLoop loop;
+    WebSocketServer server(&loop, InetAddress(9500));
+
+    // 设置连接处理器
+    server.setConnectionHandler([](const WsSessionPtr& session) {
+        std::cout << "New connection: " << session->clientAddress() << std::endl;
+        session->sendText("Welcome!");
+    });
+
+    // 设置消息处理器
+    server.setMessageHandler([](const WsSessionPtr& session, const WsMessage& msg) {
+        if (msg.isText()) {
+            // Echo
+            session->sendText("Echo: " + msg.text());
+        }
+    });
+
+    server.start();
+    loop.loop();
+}
+```
+
+### 特性
+
+- 完整的 RFC 6455 握手协议
+- 文本/二进制消息支持
+- Ping/Pong 心跳
+- 关闭帧处理
+- 自定义握手验证
+- 广播消息
+
 ## 技术栈
 
 - C++17
 - epoll (Linux)
 - nlohmann/json
 - **Protobuf** (高性能序列化)
+- **OpenSSL** (WebSocket SHA1 计算)
 - 无锁编程
 
 ## License
