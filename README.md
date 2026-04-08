@@ -27,22 +27,34 @@
 ```
 mymuduo-http/
 ├── src/
-│   ├── http/           # HTTP 模块
-│   ├── rpc/            # RPC 模块
-│   ├── timer/          # 定时器
-│   ├── asynclogger/    # 异步日志
-│   ├── pool/           # 连接池
-│   ├── balancer/       # 负载均衡
-│   ├── registry/       # 服务注册中心
-│   ├── websocket/      # WebSocket
-│   ├── util/           # 工具类
-│   └── config/         # 配置管理
-├── examples/           # 示例代码
-├── benchmark/          # 性能压测
+│   ├── net/            # 核心网络库（EventLoop, Channel, TcpServer, Buffer 等）
+│   ├── http/           # HTTP/1.1 服务器（路由、中间件、静态文件）
+│   ├── rpc/            # RPC 框架（JSON-RPC 2.0 + Protobuf-RPC）
+│   ├── websocket/      # WebSocket 服务器（RFC 6455）
+│   ├── registry/       # 服务注册与发现（REST API + 心跳 + 健康检查）
+│   ├── balancer/       # 负载均衡（5 种策略）
+│   ├── timer/          # 时间轮定时器（O(1) 复杂度）
+│   ├── pool/           # TCP 连接池
+│   ├── asynclogger/    # 双缓冲异步日志
+│   ├── config/         # INI 格式配置管理
+│   └── util/           # 工具类（信号处理）
+├── examples/           # 8 个示例程序
+├── benchmark/          # 性能压测工具
 ├── tests/              # 单元测试
-├── config/             # 配置文件
+├── docs/               # 项目文档
+├── config/             # 配置文件示例
 └── CMakeLists.txt
 ```
+
+## 构建依赖
+
+| 依赖 | 用途 | 安装方式 (Ubuntu) |
+|------|------|------------------|
+| CMake ≥ 3.10 | 构建系统 | `sudo apt install cmake` |
+| GCC ≥ 7 (C++17) | 编译器 | `sudo apt install g++` |
+| Protobuf | RPC 序列化 | `sudo apt install libprotobuf-dev protobuf-compiler` |
+| OpenSSL | WebSocket SHA1 | `sudo apt install libssl-dev` |
+| nlohmann/json | JSON 解析 | CMake 自动下载（若未安装） |
 
 ## 快速开始
 
@@ -54,16 +66,38 @@ cd mymuduo-http
 # 编译
 mkdir build && cd build
 cmake ..
-make -j4
+make -j$(nproc)
 
-# 运行 HTTP 服务器
-./http_server
+# 运行示例
+./http_server              # HTTP 服务器（端口 8080）
+./rpc_server               # JSON-RPC 服务器
+./rpc_server_pb            # Protobuf-RPC 服务器
+./websocket_server         # WebSocket 服务器
+./registry_server          # 服务注册中心
+./full_server ../config/server.conf  # 完整版（所有模块）
 
-# 运行 RPC 服务器
-./rpc_server
+# 运行测试
+./test_load_balancer
+./test_registry
+./test_websocket_frame
+```
 
-# 运行完整版（使用所有模块）
-./full_server ../config/server.conf
+### 常见问题
+
+**Q: 编译报错找不到 protobuf?**
+```bash
+sudo apt install libprotobuf-dev protobuf-compiler
+```
+
+**Q: 如何设置 I/O 线程数?**
+```cpp
+server.setThreadNum(4);  // 4 个 subReactor 线程
+```
+
+**Q: 如何实现优雅退出?**
+```cpp
+#include "util/SignalHandler.h"
+Signals::gracefulExit([&]() { loop.quit(); });
 ```
 
 ## HTTP 使用
