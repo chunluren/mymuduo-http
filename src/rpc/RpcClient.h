@@ -161,23 +161,28 @@ private:
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) return -1;
 
-        // 解析主机名
-        hostent* host = gethostbyname(host_.c_str());
-        if (!host) {
+        // 使用 getaddrinfo 替代废弃的 gethostbyname（线程安全）
+        addrinfo hints = {};
+        hints.ai_family = AF_INET;  // IPv4
+        hints.ai_socktype = SOCK_STREAM;
+
+        addrinfo* result = nullptr;
+        int ret = getaddrinfo(host_.c_str(),
+                              std::to_string(port_).c_str(),
+                              &hints, &result);
+        if (ret != 0 || !result) {
             close(sock);
             return -1;
         }
 
-        sockaddr_in addr;
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(port_);
-        addr.sin_addr = *((in_addr*)host->h_addr);
-
-        if (::connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        // 使用第一个地址
+        if (::connect(sock, result->ai_addr, result->ai_addrlen) < 0) {
+            freeaddrinfo(result);
             close(sock);
             return -1;
         }
 
+        freeaddrinfo(result);
         return sock;
     }
 };

@@ -103,6 +103,8 @@ class HttpServer {
 public:
     /// 最大请求体大小 (10MB)
     static constexpr size_t kMaxBodySize = 10 * 1024 * 1024;
+    /// 最大请求行长度
+    static constexpr size_t kMaxRequestLine = 8192;
 
     /**
      * @brief 构造 HTTP 服务器
@@ -388,6 +390,9 @@ private:
 
         // 解析请求行
         std::string requestLine = header.substr(0, lineEnd);
+        if (requestLine.size() > kMaxRequestLine) {
+            return false;
+        }
         if (!request.parseRequestLine(requestLine)) {
             return false;
         }
@@ -455,6 +460,32 @@ private:
     }
 
     /**
+     * @brief URL 解码
+     * @param encoded 编码的字符串
+     * @return 解码后的字符串
+     */
+    std::string urlDecode(const std::string& encoded) {
+        std::string result;
+        result.reserve(encoded.size());
+
+        for (size_t i = 0; i < encoded.size(); ++i) {
+            if (encoded[i] == '%' && i + 2 < encoded.size()) {
+                // 解析十六进制值
+                char hex[3] = {encoded[i + 1], encoded[i + 2], '\0'};
+                char* end = nullptr;
+                long val = strtol(hex, &end, 16);
+                if (end == hex + 2 && val >= 0 && val <= 255) {
+                    result += static_cast<char>(val);
+                    i += 2;
+                    continue;
+                }
+            }
+            result += encoded[i];
+        }
+        return result;
+    }
+
+    /**
      * @brief 提供静态文件服务
      * @param request HTTP 请求
      * @param response HTTP 响应
@@ -463,11 +494,15 @@ private:
      */
     void serveFile(const HttpRequest& /*request*/, HttpResponse& response,
                    const std::string& dir, const std::string& filename) {
-        // 安全检查：防止路径遍历攻击
-        if (filename.empty() ||
-            filename.find("..") != std::string::npos ||
-            filename[0] == '/' ||
-            filename[0] == '~') {
+        // 先进行 URL 解码，再检查路径遍历
+        std::string decodedFilename = urlDecode(filename);
+
+        // 安全检查：防止路径遍历攻击（包括编码形式）
+        if (decodedFilename.empty() ||
+            decodedFilename.find("..") != std::string::npos ||
+            decodedFilename[0] == '/' ||
+            decodedFilename[0] == '~' ||
+            decodedFilename.find('\\') != std::string::npos) {
             response = HttpResponse::badRequest("Invalid path");
             return;
         }

@@ -35,6 +35,7 @@
 #include <openssl/sha.h>
 #include <sstream>
 #include <iomanip>
+#include <random>
 
 /**
  * @enum WsOpcode
@@ -169,8 +170,13 @@ public:
         // 掩码密钥
         uint8_t maskingKey[4] = {0};
         if (mask) {
+            // 使用密码学安全的随机数生成器
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<uint32_t> dist(0, 255);
+
             for (int i = 0; i < 4; ++i) {
-                maskingKey[i] = static_cast<uint8_t>(rand() % 256);
+                maskingKey[i] = static_cast<uint8_t>(dist(gen));
                 data.push_back(maskingKey[i]);
             }
         }

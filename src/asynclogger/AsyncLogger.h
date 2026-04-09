@@ -302,8 +302,8 @@ private:
      * 使用 localtime_r (POSIX 线程安全版本)
      */
     std::string getTimestamp() {
-        auto now = std::chrono::system_clock::now();
-        auto tt = std::chrono::system_clock::to_time_t(now);
+        auto now = std::chrono::system_clock::now();    // 获取当前时间点
+        auto tt = std::chrono::system_clock::to_time_t(now);        // 转换为 time_t
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now.time_since_epoch()) % 1000;
 

@@ -51,7 +51,7 @@ std::string InetAddress::toIpPort() const
      * 使用sprintf将端口号格式化追加到IP字符串末尾，
      * 形成完整的"ip:port"格式字符串
      */
-    sprintf(buf + end, ":%u", port);
+    snprintf(buf + end, sizeof(buf) - end, ":%u", port);
     return buf;
 }
 

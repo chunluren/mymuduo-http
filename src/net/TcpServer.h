@@ -221,7 +221,7 @@ private:
 
     ThreadInitCallback threadInitCallback_;  ///< loop 线程初始化的回调
 
-    int nextConnId_;              ///< 下一个连接 ID (原子操作)
+    std::atomic<int> nextConnId_;  ///< 下一个连接 ID (原子递增，线程安全)
     std::atomic_int started_{0};  ///< 启动标志，防止重复启动
 
     ConnectionMap connections_;  ///< 保存所有的连接

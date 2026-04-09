@@ -54,8 +54,8 @@ TcpServer::TcpServer(EventLoop *loop,
               : loop_(CheckLoopNotNull(loop))       // 确保 loop 非空
               , ipPort_(listenAddr.toIpPort())      // 保存监听地址字符串
               , name_(nameArg)                       // 保存服务器名称
-              , acceptor_(new Acceptor(loop, listenAddr, option == kReusePort))  // 创建 Acceptor
-              , threadPool_(new EventLoopThreadPool(loop, name_))  // 创建线程池
+              , acceptor_(std::make_unique<Acceptor>(loop, listenAddr, option == kReusePort))  // 创建 Acceptor
+              , threadPool_(std::make_unique<EventLoopThreadPool>(loop, name_))  // 创建线程池
               , connectionCallback_()                // 初始化回调为空
               , messageCallback_()
               , nextConnId_(1)                       // 连接 ID 从 1 开始
@@ -148,8 +148,8 @@ void TcpServer::newConnection(int sockfd, const InetAddress &peerAddr)
     // 生成唯一的连接名称
     // 格式: 服务器名-IP:Port#连接ID
     char buf[64] = {0};
-    snprintf(buf, sizeof buf, "-%s#%d", ipPort_.c_str(), nextConnId_);
-    ++nextConnId_;  // 递增连接 ID
+    int connId = nextConnId_.fetch_add(1);  // 原子递增连接 ID
+    snprintf(buf, sizeof buf, "-%s#%d", ipPort_.c_str(), connId);
     std::string connName = name_ + buf;
 
     LOG_INFO("TcpServer::newConnection [%s] - new connection [%s] from %s\n",
@@ -167,7 +167,7 @@ void TcpServer::newConnection(int sockfd, const InetAddress &peerAddr)
 
     // 根据连接成功的 sockfd 创建 TcpConnection 对象
     // TcpConnection 构造函数会创建 Socket 和 Channel
-    TcpConnectionPtr conn(new TcpConnection(ioLoop, connName, sockfd, localAddr, peerAddr));
+    auto conn = std::make_shared<TcpConnection>(ioLoop, connName, sockfd, localAddr, peerAddr);
 
     // 将连接保存到连接映射表中
     connections_[connName] = conn;

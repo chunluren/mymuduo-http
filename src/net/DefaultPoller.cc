@@ -1,5 +1,6 @@
 #include "Poller.h"
 #include <stdlib.h>
+#include <memory>
 #include "EPollPoller.h"
 
 Poller* Poller::newDefaultPoller(EventLoop* loop)
@@ -10,6 +11,6 @@ Poller* Poller::newDefaultPoller(EventLoop* loop)
     }
     else
     {
-        return new EPollPoller(loop);
+        return std::make_unique<EPollPoller>(loop).release();
     }
 }

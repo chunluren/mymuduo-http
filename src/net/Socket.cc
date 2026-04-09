@@ -59,24 +59,35 @@ void Socket::shutdownWrite()
 void Socket::setTcpNoDelay(bool on)
 {
     int optval = on ? 1 : 0;
-    ::setsockopt(sockfd_, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval));
-    LOG_INFO("setTcpNoDelay %s", (on ? "ON" : "OFF")); 
+    if (::setsockopt(sockfd_, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)) < 0)
+    {
+        LOG_ERROR("setsockopt TCP_NODELAY failed, fd=%d", sockfd_);
+    }
 }
 
 void Socket::setReuseAddr(bool on)
-{ 
+{
     int optval = on ? 1 : 0;
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0)
+    {
+        LOG_ERROR("setsockopt SO_REUSEADDR failed, fd=%d", sockfd_);
+    }
 }
 
 void Socket::setReusePort(bool on)
 {
     int optval = on ? 1 : 0;
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval)) < 0)
+    {
+        LOG_ERROR("setsockopt SO_REUSEPORT failed, fd=%d", sockfd_);
+    }
 }
 
 void Socket::setKeepAlive(bool on)
 {
     int optval = on ? 1 : 0;
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval));
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0)
+    {
+        LOG_ERROR("setsockopt SO_KEEPALIVE failed, fd=%d", sockfd_);
+    }
 }
