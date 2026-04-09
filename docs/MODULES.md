@@ -6,13 +6,13 @@
 
 ```
 mymuduo-http/src/
-├── net/           # 核心网络库（Reactor 模式基础设施）
-├── http/          # HTTP/1.1 服务器
-├── rpc/           # RPC 框架（JSON-RPC 2.0 + Protobuf-RPC）
-├── websocket/     # WebSocket 协议（RFC 6455）
+├── net/           # 核心网络库（Reactor 模式，含 TcpServer + TcpClient + Connector + Timer 集成）
+├── http/          # HTTP 服务端 + 客户端（HttpServer, HttpClient）
+├── rpc/           # RPC 框架（JSON-RPC 2.0 + Protobuf-RPC，含 ReactorRpcClient）
+├── websocket/     # WebSocket 服务端 + 客户端（WebSocketServer, WebSocketClient）
 ├── registry/      # 服务注册与发现
-├── balancer/      # 负载均衡策略
-├── timer/         # 时间轮定时器
+├── balancer/      # 负载均衡策略（5 种）
+├── timer/         # 时间轮定时器（已集成到 EventLoop）
 ├── pool/          # TCP 连接池
 ├── asynclogger/   # 双缓冲异步日志
 ├── config/        # INI 格式配置管理
@@ -56,6 +56,11 @@ void wakeup();                            // 通过 eventfd 唤醒阻塞中的 e
 void updateChannel(Channel* channel);     // 注册/更新 Channel 到 Poller
 void removeChannel(Channel* channel);     // 从 Poller 移除 Channel
 bool hasChannel(Channel* channel);        // 查询 Channel 是否在本 EventLoop
+
+// 定时器接口（timerfd 集成）
+TimerId runAfter(double delaySec, Functor cb);   // 延迟执行
+TimerId runEvery(double intervalSec, Functor cb); // 周期执行
+void cancel(TimerId timerId);                     // 取消定时器
 
 // 线程断言
 bool isInLoopThread() const;              // 当前线程是否为 EventLoop 所属线程

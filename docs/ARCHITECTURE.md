@@ -16,23 +16,50 @@ mymuduo-http 是一个基于 Reactor 模式的高性能网络框架，采用 C++
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           应用层                                     │
-├─────────────┬─────────────┬─────────────┬─────────────┬─────────────┤
-│  HttpServer │  RpcServer  │ WsServer    │RegistryServer│   ...       │
-├─────────────┴─────────────┴─────────────┴─────────────┴─────────────┤
+├──────────────┬──────────────┬──────────────┬────────────────────────┤
+│  HttpServer  │  HttpClient  │  WsServer    │  WsClient             │
+│  RpcServer   │ReactorRpcClient│RegistryServer│RegistryClient        │
+├──────────────┴──────────────┴──────────────┴────────────────────────┤
 │                           服务层                                     │
 ├─────────────┬─────────────┬─────────────┬─────────────┬─────────────┤
 │ ConnectionPool│ TimerQueue │ HealthChecker│ LoadBalancer│  ...       │
 ├─────────────┴─────────────┴─────────────┴─────────────┴─────────────┤
-│                           核心网络层                                 │
+│                      核心网络层（服务端 + 客户端）                      │
 ├─────────────────────────────────────────────────────────────────────┤
-│  TcpServer  │  TcpConnection  │  Acceptor  │  EventLoopThreadPool  │
+│  TcpServer  │  TcpClient  │  TcpConnection (共用)  │  Connector    │
+│  Acceptor   │             │                        │  (非阻塞connect)│
 ├─────────────────────────────────────────────────────────────────────┤
-│  EventLoop  │  Channel  │  Poller (epoll)  │  Buffer  │  Socket    │
+│  EventLoop (timerfd 集成) │ Channel │ Poller (epoll) │ Buffer │ Socket│
 ├─────────────────────────────────────────────────────────────────────┤
 │                           基础设施层                                 │
 ├─────────────┬─────────────┬─────────────┬─────────────┬─────────────┤
-│  Timestamp  │  Thread     │  Logger     │  noncopyable│  ...        │
+│  Timestamp  │  Thread     │  Logger     │  noncopyable│  TimerId    │
 └─────────────┴─────────────┴─────────────┴─────────────┴─────────────┘
+```
+
+### 服务端 vs 客户端路径
+
+```
+服务端: TcpServer → Acceptor → accept()  → TcpConnection
+客户端: TcpClient → Connector → connect() → TcpConnection
+                                              ↑
+                           连接建立后完全相同，共用 TcpConnection
+
+Connector 特性:
+  - 非阻塞 connect: EINPROGRESS → EPOLLOUT → getsockopt(SO_ERROR)
+  - 指数退避重连: 500ms → 1s → 2s → ... → 30s
+  - TcpClient.enableRetry() 开启断线自动重连
+```
+
+### 定时器集成
+
+```
+EventLoop 内置 timerfd + TimerQueue (时间轮):
+  loop->runAfter(delaySec, callback)   // 延迟执行
+  loop->runEvery(intervalSec, callback) // 周期执行
+  loop->cancel(timerId)                 // 取消定时器
+
+timerfd_create(CLOCK_MONOTONIC) → 注册到 epoll → 周期触发 tick()
 ```
 
 ---
