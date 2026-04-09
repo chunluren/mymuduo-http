@@ -53,6 +53,7 @@
 #include <unordered_map>
 #include <regex>
 #include <atomic>
+#include <climits>
 
 /// 请求处理函数类型
 using HttpHandler = std::function<void(const HttpRequest&, HttpResponse&)>;
@@ -235,6 +236,22 @@ public:
     void use(HttpHandler middleware) {
         if (started_.load()) return;
         middlewares_.push_back(middleware);
+    }
+
+    /**
+     * @brief 启用 CORS 支持
+     * @param origin 允许的源（默认 "*"）
+     *
+     * 自动添加 CORS 中间件，并为所有路径处理 OPTIONS 预检请求。
+     */
+    void enableCors(const std::string& origin = "*") {
+        if (started_.load()) return;
+
+        // 添加 CORS 中间件：为每个响应设置 CORS 头
+        std::string capturedOrigin = origin;
+        use([capturedOrigin](const HttpRequest& /*req*/, HttpResponse& resp) {
+            resp.setCors(capturedOrigin);
+        });
     }
 
 private:
@@ -507,7 +524,21 @@ private:
             return;
         }
 
-        std::string filepath = dir + "/" + filename;
+        std::string filepath = dir + "/" + decodedFilename;
+
+        // realpath 验证：确保解析后的路径仍在 dir 下
+        char resolvedPath[PATH_MAX];
+        char resolvedDir[PATH_MAX];
+        if (!realpath(filepath.c_str(), resolvedPath) ||
+            !realpath(dir.c_str(), resolvedDir)) {
+            response = HttpResponse::notFound();
+            return;
+        }
+        // 确保文件路径以目录路径为前缀
+        if (std::string(resolvedPath).find(resolvedDir) != 0) {
+            response = HttpResponse::badRequest("Invalid path");
+            return;
+        }
 
         // 使用 RAII 包装 FILE*
         FILE* fp = fopen(filepath.c_str(), "rb");

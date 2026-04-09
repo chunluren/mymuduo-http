@@ -215,6 +215,66 @@ public:
         }
     }
 
+    /**
+     * @brief 获取查询参数值
+     * @param key 参数名
+     * @param defaultVal 默认值
+     * @return 参数值，不存在则返回默认值
+     */
+    std::string getParam(const std::string& key, const std::string& defaultVal = "") const {
+        auto it = params.find(key);
+        return it != params.end() ? it->second : defaultVal;
+    }
+
+    // ==================== Cookie 解析 ====================
+
+    /**
+     * @brief 解析所有 Cookie
+     * @return Cookie 键值对映射
+     *
+     * 解析 Cookie 头: "session=abc123; theme=dark; lang=zh"
+     */
+    std::unordered_map<std::string, std::string> cookies() const {
+        std::unordered_map<std::string, std::string> result;
+        std::string cookieHeader = getHeader("cookie");
+        if (cookieHeader.empty()) return result;
+
+        size_t start = 0;
+        while (start < cookieHeader.size()) {
+            size_t semi = cookieHeader.find(';', start);
+            std::string pair;
+            if (semi == std::string::npos) {
+                pair = cookieHeader.substr(start);
+                start = cookieHeader.size();
+            } else {
+                pair = cookieHeader.substr(start, semi - start);
+                start = semi + 1;
+            }
+
+            // 去除前导空格
+            size_t pairStart = pair.find_first_not_of(' ');
+            if (pairStart == std::string::npos) continue;
+            pair = pair.substr(pairStart);
+
+            size_t eq = pair.find('=');
+            if (eq != std::string::npos) {
+                result[pair.substr(0, eq)] = pair.substr(eq + 1);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * @brief 获取单个 Cookie 值
+     * @param name Cookie 名
+     * @return Cookie 值，不存在返回空字符串
+     */
+    std::string cookie(const std::string& name) const {
+        auto all = cookies();
+        auto it = all.find(name);
+        return it != all.end() ? it->second : "";
+    }
+
 private:
     /**
      * @brief 字符串转 HTTP 方法

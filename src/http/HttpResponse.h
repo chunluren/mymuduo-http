@@ -39,9 +39,21 @@ enum class HttpStatusCode {
     OK = 200,                    ///< 成功
     CREATED = 201,               ///< 已创建
     NO_CONTENT = 204,            ///< 无内容
+    MOVED_PERMANENTLY = 301,     ///< 永久重定向
+    FOUND = 302,                 ///< 临时重定向
+    NOT_MODIFIED = 304,          ///< 未修改（协商缓存）
     BAD_REQUEST = 400,           ///< 错误请求
+    UNAUTHORIZED = 401,          ///< 未认证
+    FORBIDDEN = 403,             ///< 禁止访问
     NOT_FOUND = 404,             ///< 未找到
-    INTERNAL_SERVER_ERROR = 500  ///< 服务器内部错误
+    METHOD_NOT_ALLOWED = 405,    ///< 方法不允许
+    REQUEST_TIMEOUT = 408,       ///< 请求超时
+    PAYLOAD_TOO_LARGE = 413,     ///< 请求体太大
+    TOO_MANY_REQUESTS = 429,     ///< 请求过于频繁
+    INTERNAL_SERVER_ERROR = 500, ///< 服务器内部错误
+    BAD_GATEWAY = 502,           ///< 网关错误
+    SERVICE_UNAVAILABLE = 503,   ///< 服务不可用
+    GATEWAY_TIMEOUT = 504        ///< 网关超时
 };
 
 /**
@@ -84,24 +96,24 @@ public:
     void setStatusCode(HttpStatusCode code) {
         statusCode = code;
         switch (code) {
-            case HttpStatusCode::OK:
-                statusMessage = "OK";
-                break;
-            case HttpStatusCode::CREATED:
-                statusMessage = "Created";
-                break;
-            case HttpStatusCode::NO_CONTENT:
-                statusMessage = "No Content";
-                break;
-            case HttpStatusCode::BAD_REQUEST:
-                statusMessage = "Bad Request";
-                break;
-            case HttpStatusCode::NOT_FOUND:
-                statusMessage = "Not Found";
-                break;
-            case HttpStatusCode::INTERNAL_SERVER_ERROR:
-                statusMessage = "Internal Server Error";
-                break;
+            case HttpStatusCode::OK:                    statusMessage = "OK"; break;
+            case HttpStatusCode::CREATED:               statusMessage = "Created"; break;
+            case HttpStatusCode::NO_CONTENT:             statusMessage = "No Content"; break;
+            case HttpStatusCode::MOVED_PERMANENTLY:      statusMessage = "Moved Permanently"; break;
+            case HttpStatusCode::FOUND:                  statusMessage = "Found"; break;
+            case HttpStatusCode::NOT_MODIFIED:            statusMessage = "Not Modified"; break;
+            case HttpStatusCode::BAD_REQUEST:            statusMessage = "Bad Request"; break;
+            case HttpStatusCode::UNAUTHORIZED:           statusMessage = "Unauthorized"; break;
+            case HttpStatusCode::FORBIDDEN:              statusMessage = "Forbidden"; break;
+            case HttpStatusCode::NOT_FOUND:              statusMessage = "Not Found"; break;
+            case HttpStatusCode::METHOD_NOT_ALLOWED:     statusMessage = "Method Not Allowed"; break;
+            case HttpStatusCode::REQUEST_TIMEOUT:        statusMessage = "Request Timeout"; break;
+            case HttpStatusCode::PAYLOAD_TOO_LARGE:      statusMessage = "Payload Too Large"; break;
+            case HttpStatusCode::TOO_MANY_REQUESTS:      statusMessage = "Too Many Requests"; break;
+            case HttpStatusCode::INTERNAL_SERVER_ERROR:  statusMessage = "Internal Server Error"; break;
+            case HttpStatusCode::BAD_GATEWAY:            statusMessage = "Bad Gateway"; break;
+            case HttpStatusCode::SERVICE_UNAVAILABLE:    statusMessage = "Service Unavailable"; break;
+            case HttpStatusCode::GATEWAY_TIMEOUT:        statusMessage = "Gateway Timeout"; break;
         }
     }
 
@@ -281,5 +293,56 @@ public:
         resp.setStatusCode(HttpStatusCode::INTERNAL_SERVER_ERROR);
         resp.setText(msg);
         return resp;
+    }
+
+    /**
+     * @brief 创建重定向响应
+     * @param url 重定向目标 URL
+     * @param code 状态码（默认 302 临时重定向）
+     */
+    static HttpResponse redirect(const std::string& url,
+                                  HttpStatusCode code = HttpStatusCode::FOUND) {
+        HttpResponse resp;
+        resp.setStatusCode(code);
+        resp.setHeader("Location", url);
+        resp.setBody("");
+        return resp;
+    }
+
+    // ==================== CORS ====================
+
+    /**
+     * @brief 设置 CORS 响应头
+     * @param origin 允许的源（默认 "*"）
+     */
+    void setCors(const std::string& origin = "*") {
+        headers["Access-Control-Allow-Origin"] = origin;
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+        headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+        headers["Access-Control-Max-Age"] = "86400";
+    }
+
+    // ==================== Cookie ====================
+
+    /**
+     * @brief 设置 Cookie
+     * @param name Cookie 名
+     * @param value Cookie 值
+     * @param maxAge 过期时间（秒），-1 表示会话 Cookie
+     * @param path 作用路径
+     * @param httpOnly 是否 HttpOnly（JS 不可读）
+     * @param secure 是否仅 HTTPS 传输
+     */
+    void setCookie(const std::string& name, const std::string& value,
+                   int maxAge = -1, const std::string& path = "/",
+                   bool httpOnly = true, bool secure = false) {
+        std::string cookie = name + "=" + value;
+        cookie += "; Path=" + path;
+        if (maxAge >= 0) {
+            cookie += "; Max-Age=" + std::to_string(maxAge);
+        }
+        if (httpOnly) cookie += "; HttpOnly";
+        if (secure) cookie += "; Secure";
+        headers["Set-Cookie"] = cookie;
     }
 };

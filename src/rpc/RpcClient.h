@@ -186,3 +186,165 @@ private:
         return sock;
     }
 };
+
+// ==================== Reactor 版 RPC 客户端 ====================
+
+#include "net/TcpClient.h"
+#include "net/EventLoop.h"
+#include "net/EventLoopThread.h"
+#include "net/Buffer.h"
+#include "net/Callbacks.h"
+
+#include <condition_variable>
+
+/**
+ * @class ReactorRpcClient
+ * @brief 基于 Reactor 架构的 JSON-RPC 2.0 客户端
+ *
+ * 与 RpcClient 的区别:
+ * - 使用 TcpClient 维持长连接（不需要每次建连）
+ * - 非阻塞 I/O，基于 EventLoop
+ * - 支持自动重连
+ *
+ * @example
+ * @code
+ * EventLoop loop;
+ * ReactorRpcClient client(&loop, InetAddress("127.0.0.1", 8080), "RpcClient");
+ * client.connect();
+ *
+ * // 同步调用（内部等待响应）
+ * json result = client.call("add", {1, 2});
+ *
+ * // 异步调用
+ * auto future = client.asyncCall("multiply", {3, 4});
+ * json result2 = future.get();
+ * @endcode
+ */
+class ReactorRpcClient {
+public:
+    ReactorRpcClient(EventLoop* loop, const InetAddress& serverAddr,
+                     const std::string& name)
+        : client_(loop, serverAddr, name)
+        , nextId_(1)
+    {
+        client_.setConnectionCallback(
+            [this](const TcpConnectionPtr& conn) {
+                if (conn->connected()) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    conn_ = conn;
+                    connCv_.notify_all();
+                } else {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    conn_.reset();
+                }
+            });
+
+        client_.setMessageCallback(
+            [this](const TcpConnectionPtr& /*conn*/, Buffer* buf, Timestamp /*time*/) {
+                std::string data = buf->retrieveAllAsString();
+                // 解析 HTTP 响应中的 JSON body
+                size_t bodyStart = data.find("\r\n\r\n");
+                if (bodyStart == std::string::npos) return;
+                std::string respBody = data.substr(bodyStart + 4);
+
+                try {
+                    json resp = json::parse(respBody);
+                    int id = resp.value("id", -1);
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto it = pendingCalls_.find(id);
+                    if (it != pendingCalls_.end()) {
+                        if (resp.contains("error")) {
+                            it->second.set_value(resp["error"]);
+                        } else {
+                            it->second.set_value(resp["result"]);
+                        }
+                        pendingCalls_.erase(it);
+                    }
+                } catch (...) {
+                    // JSON 解析失败，忽略
+                }
+            });
+
+        client_.enableRetry();
+    }
+
+    void connect() { client_.connect(); }
+    void disconnect() { client_.disconnect(); }
+
+    /**
+     * @brief 同步调用 RPC 方法
+     * @param method 方法名
+     * @param params 参数
+     * @param timeoutMs 超时时间（毫秒），默认 5000
+     * @return 调用结果
+     */
+    json call(const std::string& method, const json& params = json(),
+              int timeoutMs = 5000) {
+        auto future = asyncCall(method, params);
+        if (future.wait_for(std::chrono::milliseconds(timeoutMs)) ==
+            std::future_status::timeout) {
+            return {{"error", "RPC call timeout"}};
+        }
+        return future.get();
+    }
+
+    /**
+     * @brief 异步调用 RPC 方法
+     * @param method 方法名
+     * @param params 参数
+     * @return future<json>
+     */
+    std::future<json> asyncCall(const std::string& method, const json& params = json()) {
+        int id = nextId_++;
+        std::promise<json> promise;
+        auto future = promise.get_future();
+
+        // 构造 JSON-RPC 请求
+        json request;
+        request["jsonrpc"] = "2.0";
+        request["method"] = method;
+        request["params"] = params;
+        request["id"] = id;
+
+        std::string body = request.dump();
+        std::string httpReq = "POST /rpc HTTP/1.1\r\n"
+                             "Content-Type: application/json\r\n"
+                             "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                             "Connection: keep-alive\r\n"
+                             "\r\n" + body;
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pendingCalls_[id] = std::move(promise);
+        }
+
+        // 等待连接建立
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (!conn_) {
+                connCv_.wait_for(lock, std::chrono::milliseconds(3000),
+                                [this] { return conn_ != nullptr; });
+            }
+            if (conn_) {
+                conn_->send(httpReq);
+            } else {
+                auto it = pendingCalls_.find(id);
+                if (it != pendingCalls_.end()) {
+                    it->second.set_value({{"error", "not connected"}});
+                    pendingCalls_.erase(it);
+                }
+            }
+        }
+
+        return future;
+    }
+
+private:
+    TcpClient client_;
+    std::atomic<int> nextId_;
+
+    mutable std::mutex mutex_;
+    std::condition_variable connCv_;
+    TcpConnectionPtr conn_;
+    std::unordered_map<int, std::promise<json>> pendingCalls_;
+};
