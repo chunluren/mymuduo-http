@@ -38,9 +38,11 @@
 #include "noncopyable.h"
 #include "Timestamp.h"
 #include "CurrentThread.h"
+#include "TimerId.h"
 
 class Channel;
 class Poller;
+class TimerQueue;
 
 /**
  * @class EventLoop
@@ -178,6 +180,41 @@ public:
      */
     bool isInLoopThread() const { return threadId_ == CurrentThread::tid(); }
 
+    // ==================== 定时器接口 ====================
+
+    /**
+     * @brief 在指定延迟后执行回调
+     * @param delaySec 延迟时间（秒），支持小数（如 0.5 = 500ms）
+     * @param cb 要执行的回调函数
+     * @return TimerId 用于取消定时器
+     *
+     * @example
+     * @code
+     * loop->runAfter(5.0, []() { std::cout << "5秒后执行" << std::endl; });
+     * loop->runAfter(0.1, []() { std::cout << "100ms后执行" << std::endl; });
+     * @endcode
+     */
+    TimerId runAfter(double delaySec, Functor cb);
+
+    /**
+     * @brief 周期性执行回调
+     * @param intervalSec 间隔时间（秒），支持小数
+     * @param cb 要执行的回调函数
+     * @return TimerId 用于取消定时器
+     *
+     * @example
+     * @code
+     * loop->runEvery(1.0, []() { std::cout << "每秒执行" << std::endl; });
+     * @endcode
+     */
+    TimerId runEvery(double intervalSec, Functor cb);
+
+    /**
+     * @brief 取消定时器
+     * @param timerId runAfter/runEvery 返回的定时器 ID
+     */
+    void cancel(TimerId timerId);
+
 private:
     /**
      * @brief 处理 wakeup 事件
@@ -186,6 +223,13 @@ private:
      * 这是为了清除 wakeup 事件，防止重复触发。
      */
     void handleRead();
+
+    /**
+     * @brief 处理 timerfd 事件
+     *
+     * 当 timerfd 可读时调用，驱动时间轮 tick。
+     */
+    void handleTimerRead();
 
     /**
      * @brief 执行待处理的回调函数
@@ -215,4 +259,9 @@ private:
     std::atomic_bool callingPendingFunctors_;  ///< 标识当前 loop 是否有需要执行的回调操作
     std::vector<Functor> pendingFunctors_;     ///< 存储 loop 需要执行的所有的回调操作
     std::mutex mutex_;  ///< 互斥锁，用来保护上面 vector 容器的线程安全操作
+
+    // ==================== 定时器 ====================
+    int timerFd_;                                   ///< timerfd，驱动时间轮
+    std::unique_ptr<Channel> timerChannel_;          ///< timerfd 对应的 Channel
+    std::unique_ptr<TimerQueue> timerQueue_;          ///< 时间轮定时器队列
 };

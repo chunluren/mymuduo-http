@@ -12,12 +12,15 @@
 #include "logger.h"
 #include "Poller.h"
 #include "Channel.h"
+#include "timer/TimerQueue.h"
 
 #include <sys/eventfd.h>
+#include <sys/timerfd.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <memory>
+#include <cstring>
 
 /// 线程局部变量，用于实现 One Loop Per Thread
 /// 每个线程最多只能有一个 EventLoop
@@ -47,6 +50,41 @@ int createEventfd()
 }
 
 /**
+ * @brief 创建 timerfd，用于驱动时间轮
+ * @param tickMs 时间轮 tick 间隔（毫秒）
+ * @return 新创建的 timerfd
+ */
+int createTimerfd(int tickMs)
+{
+    int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (tfd < 0)
+    {
+        LOG_FATAL("timerfd_create error:%d \n", errno);
+    }
+
+    // 设置周期性触发
+    struct itimerspec newValue;
+    memset(&newValue, 0, sizeof(newValue));
+    // 首次触发
+    newValue.it_value.tv_sec = tickMs / 1000;
+    newValue.it_value.tv_nsec = (tickMs % 1000) * 1000000;
+    // 周期触发
+    newValue.it_interval.tv_sec = tickMs / 1000;
+    newValue.it_interval.tv_nsec = (tickMs % 1000) * 1000000;
+
+    if (::timerfd_settime(tfd, 0, &newValue, nullptr) < 0)
+    {
+        LOG_FATAL("timerfd_settime error:%d \n", errno);
+    }
+
+    return tfd;
+}
+
+/// 默认时间轮参数
+const int kTimerBuckets = 60;
+const int kTimerTickMs = 1000;
+
+/**
  * @brief EventLoop 构造函数实现
  *
  * 初始化流程:
@@ -64,6 +102,9 @@ EventLoop::EventLoop()
     , wakeupFd_(createEventfd())
     , wakeupChannel_(std::make_unique<Channel>(this, wakeupFd_))
     , callingPendingFunctors_(false)
+    , timerFd_(createTimerfd(kTimerTickMs))
+    , timerChannel_(std::make_unique<Channel>(this, timerFd_))
+    , timerQueue_(std::make_unique<TimerQueue>(kTimerBuckets, kTimerTickMs))
 {
     LOG_DEBUG("EventLoop created %p in thread %d \n", this, threadId_);
 
@@ -81,12 +122,12 @@ EventLoop::EventLoop()
     }
 
     // 设置 wakeup Channel 的读事件回调
-    // 当 wakeup fd 可读时，调用 handleRead
     wakeupChannel_->setReadCallback(std::bind(&EventLoop::handleRead, this));
-
-    // 启用 wakeup Channel 的读事件监听
-    // 这样当其他线程写入 wakeup fd 时，当前 EventLoop 会被唤醒
     wakeupChannel_->enableReading();
+
+    // 设置 timer Channel 的读事件回调
+    timerChannel_->setReadCallback(std::bind(&EventLoop::handleTimerRead, this));
+    timerChannel_->enableReading();
 }
 
 /**
@@ -100,10 +141,15 @@ EventLoop::EventLoop()
  */
 EventLoop::~EventLoop()
 {
-    wakeupChannel_->disableAll();    // 禁用所有事件
-    wakeupChannel_->remove();         // 从 Poller 移除
-    ::close(wakeupFd_);              // 关闭 fd
-    t_loopInThisThread = nullptr;    // 清除线程局部变量
+    wakeupChannel_->disableAll();
+    wakeupChannel_->remove();
+    ::close(wakeupFd_);
+
+    timerChannel_->disableAll();
+    timerChannel_->remove();
+    ::close(timerFd_);
+
+    t_loopInThisThread = nullptr;
 }
 
 /**
@@ -361,4 +407,90 @@ void EventLoop::doPendingFunctors()
     }
 
     callingPendingFunctors_ = false;
+}
+
+// ==================== 定时器实现 ====================
+
+/**
+ * @brief 处理 timerfd 事件
+ *
+ * timerfd 每隔 tickMs 触发一次，驱动时间轮 tick。
+ * 必须读走 timerfd 的数据，否则 LT 模式下会反复触发。
+ */
+void EventLoop::handleTimerRead()
+{
+    uint64_t howmany;
+    ssize_t n = ::read(timerFd_, &howmany, sizeof(howmany));
+    if (n != sizeof(howmany))
+    {
+        LOG_ERROR("EventLoop::handleTimerRead() reads %ld bytes instead of 8", n);
+    }
+
+    // 驱动时间轮转动
+    timerQueue_->tick();
+}
+
+TimerId EventLoop::runAfter(double delaySec, Functor cb)
+{
+    int delayMs = static_cast<int>(delaySec * 1000);
+    if (delayMs < 0) delayMs = 0;
+
+    int64_t id = -1;
+    if (isInLoopThread())
+    {
+        id = timerQueue_->addTimer(std::move(cb), delayMs);
+    }
+    else
+    {
+        // 跨线程投递，确保在 EventLoop 线程中操作 TimerQueue
+        auto cbPtr = std::make_shared<Functor>(std::move(cb));
+        auto idPtr = std::make_shared<int64_t>(-1);
+        runInLoop([this, cbPtr, idPtr, delayMs]() {
+            *idPtr = timerQueue_->addTimer(std::move(*cbPtr), delayMs);
+        });
+        // 注意：跨线程时 id 可能还未设置，但 TimerId 仍可用于后续 cancel
+        id = *idPtr;
+    }
+
+    return TimerId(id);
+}
+
+TimerId EventLoop::runEvery(double intervalSec, Functor cb)
+{
+    int intervalMs = static_cast<int>(intervalSec * 1000);
+    if (intervalMs <= 0) intervalMs = 1;
+
+    int64_t id = -1;
+    if (isInLoopThread())
+    {
+        id = timerQueue_->addTimer(std::move(cb), intervalMs, intervalMs);
+    }
+    else
+    {
+        auto cbPtr = std::make_shared<Functor>(std::move(cb));
+        auto idPtr = std::make_shared<int64_t>(-1);
+        runInLoop([this, cbPtr, idPtr, intervalMs]() {
+            *idPtr = timerQueue_->addTimer(std::move(*cbPtr), intervalMs, intervalMs);
+        });
+        id = *idPtr;
+    }
+
+    return TimerId(id);
+}
+
+void EventLoop::cancel(TimerId timerId)
+{
+    if (!timerId.valid()) return;
+
+    if (isInLoopThread())
+    {
+        timerQueue_->cancelTimer(timerId.id());
+    }
+    else
+    {
+        int64_t id = timerId.id();
+        runInLoop([this, id]() {
+            timerQueue_->cancelTimer(id);
+        });
+    }
 }
