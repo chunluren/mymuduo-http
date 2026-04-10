@@ -118,3 +118,32 @@ cd build && ./test_buffer   # 单个测试
 - 日志: `LOG_INFO(fmt, ...)`、`LOG_ERROR`、`LOG_FATAL`、`LOG_DEBUG`
 - CMake 自动发现: `file(GLOB TEST_SOURCES tests/*.cpp)` — 新测试放 tests/ 即可
 - InetAddress 构造: `InetAddress(port, "ip")` — 端口在前，IP 在后
+
+## 待实施计划
+
+设计文档: `docs/plans/2026-04-11-improvement-and-muduo-im-design.md`
+
+### 阶段 1: mymuduo-http 第一梯队改进
+- [ ] WebSocketServer 修复（内联缺失方法）
+- [ ] 连接池集成（MySQLPool + RedisPool）
+- [ ] 自动心跳 + 空闲超时（Timer 集成）
+- [ ] 限流 Rate Limiter（令牌桶 + 滑动窗口）
+
+### 阶段 2: mymuduo-http 第二梯队改进
+- [ ] Gzip 压缩中间件
+- [ ] Chunked Transfer Encoding
+- [ ] 内存池 / 对象池
+- [ ] 熔断器 Circuit Breaker
+
+### 阶段 3: muduo-im 服务端
+- [ ] 新仓库 + submodule + CMake
+- [ ] MySQL/Redis 连接
+- [ ] UserService（注册/登录/JWT）
+- [ ] ChatServer（WebSocket 消息路由）
+- [ ] MessageService + FriendService + GroupService
+
+### 阶段 4: muduo-im 前端 + 联调
+- [ ] index.html（登录 + 聊天界面）
+- [ ] 联调测试 + 文档
+
+下次对话: 调用 `writing-plans` skill，从阶段 1 开始实施。
