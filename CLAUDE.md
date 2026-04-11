@@ -32,7 +32,11 @@ src/
 │   ├── HttpServer.h         HTTP 服务端（路由、中间件、CORS、静态文件）
 │   ├── HttpClient.h         HTTP 客户端（GET/POST/PUT/DELETE，同步/异步）
 │   ├── HttpRequest.h        请求解析（方法、路径、头部、Cookie、查询参数）
-│   └── HttpResponse.h       响应构造（状态码、CORS、Cookie、redirect）
+│   ├── HttpResponse.h       响应构造（状态码、CORS、Cookie、redirect）
+│   ├── GzipMiddleware.h     Gzip 压缩中间件（请求解压 + 响应压缩）
+│   ├── MultipartParser.h    Multipart/form-data 文件上传解析
+│   ├── SslContext.h         OpenSSL Memory BIO 封装
+│   └── HttpsServer.h        HTTPS/TLS 服务端
 ├── rpc/              RPC 模块
 │   ├── RpcServer.h          JSON-RPC 2.0 服务端
 │   ├── RpcClient.h          JSON-RPC 客户端（阻塞版 + ReactorRpcClient）
@@ -56,13 +60,19 @@ src/
 │   ├── TimerQueue.h         时间轮 O(1)（已集成到 EventLoop）
 │   └── Timer.h              定时器对象
 ├── pool/             连接池
-│   └── ConnectionPool.h
+│   ├── ConnectionPool.h
+│   ├── MySQLPool.h          MySQL 连接池
+│   └── RedisPool.h          Redis 连接池
 ├── asynclogger/      异步日志（双缓冲）
 │   └── AsyncLogger.h
 ├── config/           配置管理
 │   └── Config.h             INI 解析
 └── util/             工具
-    └── SignalHandler.h      信号处理
+    ├── SignalHandler.h      信号处理
+    ├── RateLimiter.h        限流器（令牌桶 + 滑动窗口）
+    ├── ObjectPool.h         通用对象池
+    ├── CircuitBreaker.h     熔断器
+    └── Metrics.h            Prometheus 监控指标
 ```
 
 ## 架构
@@ -95,7 +105,7 @@ cmake -DENABLE_ASAN=ON .. && make -j$(nproc)   # AddressSanitizer
 cmake -DENABLE_TSAN=ON .. && make -j$(nproc)   # ThreadSanitizer
 ```
 
-依赖: Protobuf, OpenSSL, nlohmann/json（CMake 自动拉取）, CMake >= 3.10, GCC >= 7
+依赖: Protobuf, OpenSSL, nlohmann/json（CMake 自动拉取）, zlib, libmysqlclient (optional), libhiredis (optional), CMake >= 3.10, GCC >= 7
 
 ## 测试
 
@@ -104,11 +114,10 @@ cmake -DENABLE_TSAN=ON .. && make -j$(nproc)   # ThreadSanitizer
 cd build && ./test_buffer   # 单个测试
 ```
 
-测试文件: test_buffer, test_eventloop, test_http, test_config, test_timer, test_tcp_server_client, test_http_client, test_websocket_client, test_load_balancer, test_registry, test_websocket_frame
+测试文件: test_buffer, test_eventloop, test_http, test_config, test_timer, test_tcp_server_client, test_http_client, test_websocket_client, test_load_balancer, test_registry, test_websocket_frame, test_websocket_server, test_mysql_pool, test_redis_pool, test_rate_limiter, test_gzip, test_chunked, test_object_pool, test_circuit_breaker, test_multipart, test_metrics, test_https, test_graceful_shutdown
 
 ## 已知问题
 
-- `websocket_server` 示例链接错误: WebSocketServer.h 中 handleHandshake/handleWsFrames 等方法声明了但没有内联定义
 - `test_tcp_server_client` 的多线程测试在部分环境下超时
 
 ## 编码规范
@@ -119,31 +128,11 @@ cd build && ./test_buffer   # 单个测试
 - CMake 自动发现: `file(GLOB TEST_SOURCES tests/*.cpp)` — 新测试放 tests/ 即可
 - InetAddress 构造: `InetAddress(port, "ip")` — 端口在前，IP 在后
 
-## 待实施计划
+## 完成记录
 
-设计文档: `docs/plans/2026-04-11-improvement-and-muduo-im-design.md`
-
-### 阶段 1: mymuduo-http 第一梯队改进 ✓
-- [x] WebSocketServer 修复（内联缺失方法）
-- [x] 连接池集成（MySQLPool + RedisPool）
-- [x] 自动心跳 + 空闲超时（Timer 集成）
-- [x] 限流 Rate Limiter（令牌桶 + 滑动窗口）
-
-### 阶段 2: mymuduo-http 第二梯队改进 ✓
-- [x] Gzip 压缩中间件
-- [x] Chunked Transfer Encoding
-- [x] 内存池 / 对象池
-- [x] 熔断器 Circuit Breaker
-
-### 阶段 3: muduo-im 服务端 ✓
-- [x] 新仓库 + submodule + CMake
-- [x] MySQL/Redis 连接
-- [x] UserService（注册/登录/JWT）
-- [x] ChatServer（WebSocket 消息路由）
-- [x] MessageService + FriendService + GroupService
-
-### 阶段 4: muduo-im 前端 + 联调 ✓
-- [x] index.html（登录 + 聊天界面）
-- [x] 联调测试 + 文档
-
-所有 4 个阶段已全部完成。
+所有 4 个阶段 + 额外改进已全部完成:
+- 阶段 1: WebSocketServer 修复、MySQLPool、RedisPool、心跳/超时、限流器
+- 阶段 2: Gzip 压缩、Chunked Transfer、ObjectPool、CircuitBreaker
+- 阶段 3: muduo-im 服务端（JWT、UserService、ChatServer、消息路由）
+- 阶段 4: muduo-im 前端（index.html 单文件 + 静态文件服务）
+- 额外改进: HTTPS/TLS、优雅关闭、Multipart 解析、Prometheus 监控、路由线程安全、路由 O(1) 匹配、请求解压、热路径日志优化、toString 性能优化

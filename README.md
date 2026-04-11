@@ -13,11 +13,24 @@
 - ✅ Keep-Alive 连接复用
 - ✅ 路由注册 (GET/POST/PUT/DELETE) + 正则匹配
 
+### 扩展功能
+- ✅ **HTTPS/TLS** — OpenSSL Memory BIO，零拷贝加解密
+- ✅ **Gzip 压缩** — 请求解压 + 响应压缩中间件
+- ✅ **Chunked Transfer Encoding** — 流式传输支持
+- ✅ **Multipart/form-data** — 文件上传解析
+- ✅ **Rate Limiter** — 令牌桶 + 滑动窗口限流
+- ✅ **Prometheus 监控指标** — 请求计数、延迟直方图、/metrics 端点
+- ✅ **优雅关闭 (Graceful Shutdown)** — 等待在途请求完成后退出
+
 ### 网络库增强
 - ✅ **TcpClient + Connector** — Reactor 架构客户端，非阻塞 connect + 指数退避重连
 - ✅ **时间轮定时器** — O(1) 复杂度，已集成到 EventLoop（runAfter/runEvery）
 - ✅ **异步日志** — 双缓冲，不阻塞业务线程
 - ✅ **连接池** — 复用 TCP 连接，减少开销
+- ✅ **MySQL 连接池 (MySQLPool)** — 线程安全，自动重连
+- ✅ **Redis 连接池 (RedisPool)** — 线程安全，自动重连
+- ✅ **对象池 (ObjectPool)** — 通用对象复用，减少分配开销
+- ✅ **熔断器 (CircuitBreaker)** — 故障隔离，自动恢复
 - ✅ **信号处理** — 优雅退出，忽略 SIGPIPE
 - ✅ **配置管理** — INI 格式配置文件
 - ✅ **负载均衡** — 5 种策略：轮询、加权轮询、最小连接数、随机、一致性哈希
@@ -54,8 +67,11 @@ mymuduo-http/
 | CMake ≥ 3.10 | 构建系统 | `sudo apt install cmake` |
 | GCC ≥ 7 (C++17) | 编译器 | `sudo apt install g++` |
 | Protobuf | RPC 序列化 | `sudo apt install libprotobuf-dev protobuf-compiler` |
-| OpenSSL | WebSocket SHA1 | `sudo apt install libssl-dev` |
+| OpenSSL | HTTPS/TLS + WebSocket SHA1 | `sudo apt install libssl-dev` |
+| zlib | Gzip 压缩 | `sudo apt install zlib1g-dev` |
 | nlohmann/json | JSON 解析 | CMake 自动下载（若未安装） |
+| libmysqlclient (optional) | MySQL 连接池 | `sudo apt install libmysqlclient-dev` |
+| libhiredis (optional) | Redis 连接池 | `sudo apt install libhiredis-dev` |
 
 ## 快速开始
 
@@ -92,6 +108,18 @@ cd .. && ./run_tests.sh
 ./test_load_balancer      # 负载均衡测试
 ./test_registry           # 服务注册发现测试
 ./test_websocket_frame    # WebSocket 帧编解码测试
+./test_websocket_server   # WebSocket 服务端测试
+./test_mysql_pool         # MySQL 连接池测试
+./test_redis_pool         # Redis 连接池测试
+./test_rate_limiter       # 令牌桶/滑动窗口限流测试
+./test_gzip               # Gzip 压缩测试
+./test_chunked            # Chunked Transfer 测试
+./test_object_pool        # 对象池测试
+./test_circuit_breaker    # 熔断器测试
+./test_multipart          # Multipart 解析测试
+./test_metrics            # Prometheus 监控测试
+./test_https              # HTTPS/TLS 测试
+./test_graceful_shutdown  # 优雅关闭测试
 ```
 
 ### 常见问题
@@ -349,7 +377,14 @@ int port = CONFIG_INT("server.port");
 
 ## 性能
 
-- HTTP QPS: ~20,000+ (echo, 4 threads)
+wrk 基准测试 (i5-12400F, WSL2, 4 IO 线程, 44B JSON 响应):
+
+| 并发连接 | QPS | Avg Latency | P99 Latency |
+|---------|-----|------------|-------------|
+| 64 | ~73,000 | 0.8ms | 2.9ms |
+| 256 | ~91,000 | 2.6ms | 10ms |
+| 512 | ~100,000 | 5.2ms | 17ms |
+
 - JSON-RPC QPS: ~15,000+
 - **Protobuf-RPC QPS: ~50,000+** (二进制协议更快)
 - 定时器: O(1) 插入/删除
