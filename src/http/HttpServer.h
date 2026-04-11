@@ -48,6 +48,7 @@
 #include "HttpResponse.h"
 #include "GzipMiddleware.h"
 #include "util/RateLimiter.h"
+#include "util/Metrics.h"
 #include "net/TcpServer.h"
 #include "net/EventLoop.h"
 #include "net/Buffer.h"
@@ -55,6 +56,7 @@
 #include <unordered_map>
 #include <regex>
 #include <atomic>
+#include <shared_mutex>
 #include <climits>
 #include <memory>
 
@@ -120,6 +122,7 @@ public:
      */
     HttpServer(EventLoop* loop, const InetAddress& addr, const std::string& name = "HttpServer")
         : server_(loop, addr, name)
+        , loop_(loop)
         , started_(false)
         , idleTimeoutSec_(60.0)
     {
@@ -157,6 +160,21 @@ public:
     }
 
     /**
+     * @brief 优雅关闭
+     *
+     * 停止接受新连接，等待 timeoutSec 秒后强制关闭所有连接并退出事件循环。
+     *
+     * @param timeoutSec 超时时间（秒），超时后强制退出事件循环
+     */
+    void shutdown(double timeoutSec = 5.0) {
+        started_.store(false);
+        // Use the event loop to schedule force shutdown after timeout
+        loop_->runAfter(timeoutSec, [this]() {
+            loop_->quit();
+        });
+    }
+
+    /**
      * @brief 注册 GET 路由
      * @param path URL 路径 (支持正则表达式)
      * @param handler 处理函数
@@ -177,6 +195,7 @@ public:
      */
     void GET(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;  // 启动后不允许注册
+        std::unique_lock<std::shared_mutex> lock(routesMutex_);
         routes_.push_back({HttpMethod::GET, path, handler});
     }
 
@@ -187,6 +206,7 @@ public:
      */
     void POST(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;
+        std::unique_lock<std::shared_mutex> lock(routesMutex_);
         routes_.push_back({HttpMethod::POST, path, handler});
     }
 
@@ -197,6 +217,7 @@ public:
      */
     void PUT(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;
+        std::unique_lock<std::shared_mutex> lock(routesMutex_);
         routes_.push_back({HttpMethod::PUT, path, handler});
     }
 
@@ -207,6 +228,7 @@ public:
      */
     void DELETE(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;
+        std::unique_lock<std::shared_mutex> lock(routesMutex_);
         routes_.push_back({HttpMethod::DELETE, path, handler});
     }
 
@@ -223,6 +245,7 @@ public:
      */
     void serveStatic(const std::string& urlPrefix, const std::string& dir) {
         if (started_.load()) return;
+        std::unique_lock<std::shared_mutex> lock(routesMutex_);
         staticDirs_[urlPrefix] = dir;
     }
 
@@ -245,6 +268,7 @@ public:
      */
     void use(HttpHandler middleware) {
         if (started_.load()) return;
+        std::unique_lock<std::shared_mutex> lock(routesMutex_);
         middlewares_.push_back(middleware);
     }
 
@@ -310,15 +334,66 @@ public:
         });
     }
 
+    /**
+     * @brief 启用 Metrics 指标收集
+     * @param path 指标导出端点路径（默认 "/metrics"）
+     *
+     * 启用后:
+     * - 自动记录 http_requests_total 计数
+     * - 按 HTTP 方法分别计数（http_requests_get 等）
+     * - 提供 Prometheus 格式的指标导出端点
+     *
+     * @note 必须在 start() 之前调用
+     *
+     * @example
+     * @code
+     * server.enableMetrics();           // 默认 /metrics
+     * server.enableMetrics("/stats");   // 自定义路径
+     * @endcode
+     */
+    void enableMetrics(const std::string& path = "/metrics") {
+        if (started_.load()) return;
+
+        // Metrics middleware
+        use([](const HttpRequest& req, HttpResponse& /*resp*/) {
+            Metrics::instance().increment("http_requests_total");
+            Metrics::instance().increment("http_requests_" + methodToString(req.method));
+        });
+
+        // Metrics endpoint
+        GET(path, [](const HttpRequest& /*req*/, HttpResponse& resp) {
+            resp.setContentType("text/plain; version=0.0.4");
+            resp.setBody(Metrics::instance().toPrometheus());
+        });
+    }
+
 private:
     TcpServer server_;                              ///< 底层 TCP 服务器
+    EventLoop* loop_;                               ///< 事件循环指针（用于优雅关闭）
     std::vector<Route> routes_;                     ///< 路由表
     std::vector<HttpHandler> middlewares_;          ///< 中间件列表
     std::unordered_map<std::string, std::string> staticDirs_;  ///< 静态文件目录映射
     std::atomic<bool> started_;                     ///< 是否已启动
+    mutable std::shared_mutex routesMutex_;         ///< 保护路由/中间件/静态目录的读写锁
     double idleTimeoutSec_;                          ///< 空闲连接超时（秒）
     bool gzipEnabled_ = false;                       ///< 是否启用 Gzip 压缩
     size_t gzipMinSize_ = 1024;                      ///< Gzip 最小压缩大小（字节）
+
+    /**
+     * @brief 将 HttpMethod 转换为小写字符串
+     * @param m HTTP 方法枚举
+     * @return 方法名称字符串
+     */
+    static std::string methodToString(HttpMethod m) {
+        switch (m) {
+            case HttpMethod::GET:    return "get";
+            case HttpMethod::POST:   return "post";
+            case HttpMethod::PUT:    return "put";
+            case HttpMethod::DELETE: return "delete";
+            case HttpMethod::HEAD:   return "head";
+            default:                 return "unknown";
+        }
+    }
 
     /**
      * @brief 连接回调
@@ -380,6 +455,17 @@ private:
                 conn->send(resp.toString());
                 conn->shutdown();
                 return;
+            }
+
+            // 请求体 Gzip 解压
+            if (!request.body.empty()) {
+                std::string encoding = request.getHeader("content-encoding");
+                if (encoding.find("gzip") != std::string::npos) {
+                    std::string decompressed = GzipCodec::decompress(request.body);
+                    if (!decompressed.empty()) {
+                        request.body = std::move(decompressed);
+                    }
+                }
             }
 
             // 处理请求
@@ -529,6 +615,8 @@ private:
      * 4. 返回 404
      */
     void handleRequest(const HttpRequest& request, HttpResponse& response) {
+        std::shared_lock<std::shared_mutex> lock(routesMutex_);
+
         // 执行中间件
         for (auto& middleware : middlewares_) {
             middleware(request, response);
@@ -538,16 +626,11 @@ private:
             }
         }
 
-        // 路由匹配
+        // 路由匹配（regex 已在路由注册时编译，匹配不会抛出 std::regex_error）
         for (const auto& route : routes_) {
             if (route.method == request.method) {
-                try {
-                    if (std::regex_match(request.path, route.regex)) {
-                        route.handler(request, response);
-                        return;
-                    }
-                } catch (const std::regex_error& e) {
-                    response = HttpResponse::serverError("Regex error");
+                if (std::regex_match(request.path, route.regex)) {
+                    route.handler(request, response);
                     return;
                 }
             }

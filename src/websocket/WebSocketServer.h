@@ -137,6 +137,27 @@ public:
         }
     }
 
+    /**
+     * @brief 优雅关闭
+     *
+     * 停止接受新连接，向所有活跃会话发送 Close 帧，
+     * 等待 timeoutSec 秒后强制退出事件循环。
+     *
+     * @param timeoutSec 超时时间（秒），超时后强制退出事件循环
+     */
+    void shutdown(double timeoutSec = 5.0) {
+        started_.store(false);
+        // Close all sessions gracefully
+        auto sessions = getAllSessions();
+        for (auto& session : sessions) {
+            session->close(1001, "Server shutting down");
+        }
+        // After timeout, force quit the event loop
+        loop_->runAfter(timeoutSec, [this]() {
+            loop_->quit();
+        });
+    }
+
     /// 设置配置
     void setConfig(const WebSocketConfig& config) {
         if (started_) return;
