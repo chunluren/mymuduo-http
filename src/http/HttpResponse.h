@@ -28,6 +28,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include <sstream>
 
@@ -79,6 +80,8 @@ public:
     std::unordered_map<std::string, std::string> headers;    ///< 响应头
     std::string body;                                        ///< 响应体
     bool closeConnection;                                    ///< 是否关闭连接
+    bool chunked_ = false;                              ///< 是否 chunked
+    std::vector<std::string> chunks_;                   ///< chunk 数据
 
     /**
      * @brief 默认构造函数
@@ -193,6 +196,22 @@ public:
     }
 
     /**
+     * @brief 启用 Chunked Transfer Encoding
+     * @param enabled 是否启用
+     */
+    void setChunked(bool enabled) {
+        chunked_ = enabled;
+    }
+
+    /**
+     * @brief 添加 chunk 数据
+     * @param data chunk 内容，空字符串表示结束
+     */
+    void addChunk(const std::string& data) {
+        chunks_.push_back(data);
+    }
+
+    /**
      * @brief 序列化为 HTTP 响应字符串
      * @return 完整的 HTTP 响应字符串
      *
@@ -215,7 +234,13 @@ public:
 
         // 响应头
         for (const auto& [key, value] : headers) {
+            if (chunked_ && key == "Content-Length") continue;  // chunked 模式不输出 Content-Length
             oss << key << ": " << value << "\r\n";
+        }
+
+        // Chunked 头
+        if (chunked_) {
+            oss << "Transfer-Encoding: chunked\r\n";
         }
 
         // Connection 头
@@ -228,7 +253,18 @@ public:
         oss << "\r\n";
 
         // 响应体
-        oss << body;
+        if (chunked_ && !chunks_.empty()) {
+            for (const auto& chunk : chunks_) {
+                if (chunk.empty()) {
+                    oss << "0\r\n\r\n";  // 结束标记
+                } else {
+                    oss << std::hex << chunk.size() << "\r\n";
+                    oss << chunk << "\r\n";
+                }
+            }
+        } else {
+            oss << body;
+        }
 
         return oss.str();
     }

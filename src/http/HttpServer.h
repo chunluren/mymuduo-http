@@ -46,6 +46,7 @@
 
 #include "HttpRequest.h"
 #include "HttpResponse.h"
+#include "GzipMiddleware.h"
 #include "util/RateLimiter.h"
 #include "net/TcpServer.h"
 #include "net/EventLoop.h"
@@ -277,6 +278,23 @@ public:
     }
 
     /**
+     * @brief 启用 Gzip 压缩
+     * @param minSize 最小压缩大小（字节），响应体小于此值不压缩
+     *
+     * 启用后，对满足条件的响应自动进行 Gzip 压缩:
+     * - 客户端发送 Accept-Encoding: gzip
+     * - Content-Type 为可压缩类型（text/html, application/json 等）
+     * - 响应体大小 >= minSize
+     *
+     * @note 必须在 start() 之前调用
+     */
+    void enableGzip(size_t minSize = 1024) {
+        if (started_.load()) return;
+        gzipEnabled_ = true;
+        gzipMinSize_ = minSize;
+    }
+
+    /**
      * @brief 启用 CORS 支持
      * @param origin 允许的源（默认 "*"）
      *
@@ -299,6 +317,8 @@ private:
     std::unordered_map<std::string, std::string> staticDirs_;  ///< 静态文件目录映射
     std::atomic<bool> started_;                     ///< 是否已启动
     double idleTimeoutSec_;                          ///< 空闲连接超时（秒）
+    bool gzipEnabled_ = false;                       ///< 是否启用 Gzip 压缩
+    size_t gzipMinSize_ = 1024;                      ///< Gzip 最小压缩大小（字节）
 
     /**
      * @brief 连接回调
@@ -365,6 +385,24 @@ private:
             // 处理请求
             HttpResponse response;
             handleRequest(request, response);
+
+            // Gzip 压缩
+            if (gzipEnabled_ && response.body.size() >= gzipMinSize_) {
+                std::string acceptEncoding = request.getHeader("accept-encoding");
+                if (acceptEncoding.find("gzip") != std::string::npos) {
+                    auto it = response.headers.find("Content-Type");
+                    std::string contentType = (it != response.headers.end()) ? it->second : "";
+                    if (GzipCodec::shouldCompress(contentType)) {
+                        std::string compressed = GzipCodec::compress(response.body);
+                        if (!compressed.empty() && compressed.size() < response.body.size()) {
+                            response.body = std::move(compressed);
+                            response.setContentLength(response.body.size());
+                            response.setHeader("Content-Encoding", "gzip");
+                            response.setHeader("Vary", "Accept-Encoding");
+                        }
+                    }
+                }
+            }
 
             // 发送响应
             response.closeConnection = !request.keepAlive();

@@ -22,6 +22,9 @@ find_package(Protobuf REQUIRED)
 # 查找 OpenSSL（用于 WebSocket）
 find_package(OpenSSL REQUIRED)
 
+# 查找 ZLIB（用于 Gzip 压缩）
+find_package(ZLIB REQUIRED)
+
 # mymuduo 库（核心网络库）
 file(GLOB MUDUO_SOURCES "src/net/*.cc")
 add_library(mymuduo SHARED ${MUDUO_SOURCES})
@@ -74,35 +77,35 @@ include_directories(
 
 # HTTP Server
 add_executable(http_server examples/http_server.cpp)
-target_link_libraries(http_server mymuduo nlohmann_json::nlohmann_json pthread)
+target_link_libraries(http_server mymuduo nlohmann_json::nlohmann_json ZLIB::ZLIB pthread)
 
 # RPC Server (JSON)
 add_executable(rpc_server examples/rpc_server.cpp)
-target_link_libraries(rpc_server mymuduo nlohmann_json::nlohmann_json pthread)
+target_link_libraries(rpc_server mymuduo nlohmann_json::nlohmann_json ZLIB::ZLIB pthread)
 
 # RPC Client (JSON)
 add_executable(rpc_client examples/rpc_client.cpp)
-target_link_libraries(rpc_client mymuduo nlohmann_json::nlohmann_json pthread)
+target_link_libraries(rpc_client mymuduo nlohmann_json::nlohmann_json ZLIB::ZLIB pthread)
 
 # RPC Server (Protobuf)
 add_executable(rpc_server_pb examples/rpc_server_pb.cpp)
-target_link_libraries(rpc_server_pb mymuduo rpc_proto ${Protobuf_LIBRARIES} pthread)
+target_link_libraries(rpc_server_pb mymuduo rpc_proto ${Protobuf_LIBRARIES} ZLIB::ZLIB pthread)
 
 # RPC Client (Protobuf)
 add_executable(rpc_client_pb examples/rpc_client_pb.cpp)
-target_link_libraries(rpc_client_pb mymuduo rpc_proto ${Protobuf_LIBRARIES} pthread)
+target_link_libraries(rpc_client_pb mymuduo rpc_proto ${Protobuf_LIBRARIES} ZLIB::ZLIB pthread)
 
 # Full Server
 add_executable(full_server examples/full_server.cpp)
-target_link_libraries(full_server mymuduo nlohmann_json::nlohmann_json pthread)
+target_link_libraries(full_server mymuduo nlohmann_json::nlohmann_json ZLIB::ZLIB pthread)
 
 # Registry Server
 add_executable(registry_server examples/registry_server.cpp)
-target_link_libraries(registry_server mymuduo nlohmann_json::nlohmann_json pthread)
+target_link_libraries(registry_server mymuduo nlohmann_json::nlohmann_json ZLIB::ZLIB pthread)
 
 # WebSocket Server
 add_executable(websocket_server examples/websocket_server.cpp)
-target_link_libraries(websocket_server mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto pthread)
+target_link_libraries(websocket_server mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB pthread)
 
 # Benchmark Client
 add_executable(benchmark_client benchmark/benchmark_client.cpp)
@@ -150,7 +153,7 @@ foreach(TEST_FILE ${TEST_SOURCES})
         continue()
     endif()
     add_executable(${TEST_NAME} ${TEST_FILE})
-    target_link_libraries(${TEST_NAME} mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto pthread)
+    target_link_libraries(${TEST_NAME} mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB pthread)
     # 额外依赖
     if(TEST_NAME STREQUAL "test_mysql_pool" AND MYSQL_FOUND)
         target_link_libraries(${TEST_NAME} ${MYSQL_LIBRARY})

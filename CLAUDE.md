@@ -129,11 +129,11 @@ cd build && ./test_buffer   # 单个测试
 - [x] 自动心跳 + 空闲超时（Timer 集成）
 - [x] 限流 Rate Limiter（令牌桶 + 滑动窗口）
 
-### 阶段 2: mymuduo-http 第二梯队改进
-- [ ] Gzip 压缩中间件
-- [ ] Chunked Transfer Encoding
-- [ ] 内存池 / 对象池
-- [ ] 熔断器 Circuit Breaker
+### 阶段 2: mymuduo-http 第二梯队改进 ✓
+- [x] Gzip 压缩中间件
+- [x] Chunked Transfer Encoding
+- [x] 内存池 / 对象池
+- [x] 熔断器 Circuit Breaker
 
 ### 阶段 3: muduo-im 服务端
 - [ ] 新仓库 + submodule + CMake
@@ -146,4 +146,4 @@ cd build && ./test_buffer   # 单个测试
 - [ ] index.html（登录 + 聊天界面）
 - [ ] 联调测试 + 文档
 
-下次对话: 调用 `writing-plans` skill，从阶段 2 开始实施。
+下次对话: 调用 `writing-plans` skill，从阶段 3 开始实施。
