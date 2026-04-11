@@ -108,12 +108,56 @@ target_link_libraries(websocket_server mymuduo nlohmann_json::nlohmann_json Open
 add_executable(benchmark_client benchmark/benchmark_client.cpp)
 target_link_libraries(benchmark_client pthread)
 
+# 查找 MySQL (可选)
+find_path(MYSQL_INCLUDE_DIR mysql/mysql.h
+    PATHS /usr/include /usr/local/include /usr/include/mysql)
+find_library(MYSQL_LIBRARY mysqlclient
+    PATHS /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu)
+
+if(MYSQL_INCLUDE_DIR AND MYSQL_LIBRARY)
+    set(MYSQL_FOUND TRUE)
+    message(STATUS "MySQL found: ${MYSQL_LIBRARY}")
+    include_directories(${MYSQL_INCLUDE_DIR})
+else()
+    set(MYSQL_FOUND FALSE)
+    message(STATUS "MySQL not found, MySQLPool tests will be skipped")
+endif()
+
+# 查找 hiredis (可选)
+find_path(REDIS_INCLUDE_DIR hiredis/hiredis.h
+    PATHS /usr/include /usr/local/include)
+find_library(REDIS_LIBRARY hiredis
+    PATHS /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu)
+
+if(REDIS_INCLUDE_DIR AND REDIS_LIBRARY)
+    set(REDIS_FOUND TRUE)
+    message(STATUS "hiredis found: ${REDIS_LIBRARY}")
+    include_directories(${REDIS_INCLUDE_DIR})
+else()
+    set(REDIS_FOUND FALSE)
+    message(STATUS "hiredis not found, RedisPool tests will be skipped")
+endif()
+
 # 测试
 file(GLOB TEST_SOURCES tests/*.cpp)
 foreach(TEST_FILE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
+    # 跳过需要额外依赖的测试
+    if(TEST_NAME STREQUAL "test_mysql_pool" AND NOT MYSQL_FOUND)
+        continue()
+    endif()
+    if(TEST_NAME STREQUAL "test_redis_pool" AND NOT REDIS_FOUND)
+        continue()
+    endif()
     add_executable(${TEST_NAME} ${TEST_FILE})
     target_link_libraries(${TEST_NAME} mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto pthread)
+    # 额外依赖
+    if(TEST_NAME STREQUAL "test_mysql_pool" AND MYSQL_FOUND)
+        target_link_libraries(${TEST_NAME} ${MYSQL_LIBRARY})
+    endif()
+    if(TEST_NAME STREQUAL "test_redis_pool" AND REDIS_FOUND)
+        target_link_libraries(${TEST_NAME} ${REDIS_LIBRARY})
+    endif()
 endforeach()
 
 # 安装

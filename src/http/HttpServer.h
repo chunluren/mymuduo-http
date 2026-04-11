@@ -46,6 +46,7 @@
 
 #include "HttpRequest.h"
 #include "HttpResponse.h"
+#include "util/RateLimiter.h"
 #include "net/TcpServer.h"
 #include "net/EventLoop.h"
 #include "net/Buffer.h"
@@ -54,6 +55,7 @@
 #include <regex>
 #include <atomic>
 #include <climits>
+#include <memory>
 
 /// 请求处理函数类型
 using HttpHandler = std::function<void(const HttpRequest&, HttpResponse&)>;
@@ -118,6 +120,7 @@ public:
     HttpServer(EventLoop* loop, const InetAddress& addr, const std::string& name = "HttpServer")
         : server_(loop, addr, name)
         , started_(false)
+        , idleTimeoutSec_(60.0)
     {
         // 设置连接回调
         server_.setConnectionCallback([this](const TcpConnectionPtr& conn) {
@@ -135,6 +138,12 @@ public:
      * @param num 线程数量
      */
     void setThreadNum(int num) { server_.setThreadNum(num); }
+
+    /**
+     * @brief 设置空闲连接超时时间
+     * @param seconds 超时秒数（0 表示禁用）
+     */
+    void setIdleTimeout(double seconds) { idleTimeoutSec_ = seconds; }
 
     /**
      * @brief 启动服务器
@@ -239,6 +248,35 @@ public:
     }
 
     /**
+     * @brief 启用请求频率限制
+     * @param maxRequestsPerSec 每秒最大请求数（同时作为令牌桶容量）
+     *
+     * 基于客户端 IP 的令牌桶限流，优先从 X-Real-IP / X-Forwarded-For 获取 IP。
+     * 超限返回 429 Too Many Requests。
+     *
+     * @note 必须在 start() 之前调用
+     *
+     * @example
+     * @code
+     * server.useRateLimit(100);  // 每个 IP 最多 100 请求/秒
+     * @endcode
+     */
+    void useRateLimit(int maxRequestsPerSec) {
+        if (started_.load()) return;
+        auto limiter = std::make_shared<TokenBucketLimiter>(
+            maxRequestsPerSec, maxRequestsPerSec);
+        use([limiter](const HttpRequest& req, HttpResponse& resp) {
+            std::string ip = req.getHeader("x-real-ip");
+            if (ip.empty()) ip = req.getHeader("x-forwarded-for");
+            if (ip.empty()) ip = "unknown";
+            if (!limiter->allow(ip)) {
+                resp.setStatusCode(HttpStatusCode::TOO_MANY_REQUESTS);
+                resp.setText("Rate limit exceeded");
+            }
+        });
+    }
+
+    /**
      * @brief 启用 CORS 支持
      * @param origin 允许的源（默认 "*"）
      *
@@ -260,6 +298,7 @@ private:
     std::vector<HttpHandler> middlewares_;          ///< 中间件列表
     std::unordered_map<std::string, std::string> staticDirs_;  ///< 静态文件目录映射
     std::atomic<bool> started_;                     ///< 是否已启动
+    double idleTimeoutSec_;                          ///< 空闲连接超时（秒）
 
     /**
      * @brief 连接回调
@@ -267,8 +306,16 @@ private:
      *
      * 可以在此记录连接状态
      */
-    void onConnection(const TcpConnectionPtr& /*conn*/) {
-        // 可以记录连接状态
+    void onConnection(const TcpConnectionPtr& conn) {
+        if (conn->connected() && idleTimeoutSec_ > 0) {
+            auto weakConn = std::weak_ptr<TcpConnection>(conn);
+            conn->getLoop()->runAfter(idleTimeoutSec_, [weakConn]() {
+                auto c = weakConn.lock();
+                if (c && c->connected()) {
+                    c->shutdown();
+                }
+            });
+        }
     }
 
     /**
@@ -447,6 +494,10 @@ private:
         // 执行中间件
         for (auto& middleware : middlewares_) {
             middleware(request, response);
+            // 如果中间件设置了错误状态码，停止处理
+            if (static_cast<int>(response.statusCode) >= 400) {
+                return;
+            }
         }
 
         // 路由匹配
