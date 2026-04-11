@@ -142,8 +142,8 @@ cd build && ./test_buffer   # 单个测试
 - [x] ChatServer（WebSocket 消息路由）
 - [x] MessageService + FriendService + GroupService
 
-### 阶段 4: muduo-im 前端 + 联调
-- [ ] index.html（登录 + 聊天界面）
-- [ ] 联调测试 + 文档
+### 阶段 4: muduo-im 前端 + 联调 ✓
+- [x] index.html（登录 + 聊天界面）
+- [x] 联调测试 + 文档
 
-下次对话: 调用 `writing-plans` skill，从阶段 4 开始实施。
+所有 4 个阶段已全部完成。
