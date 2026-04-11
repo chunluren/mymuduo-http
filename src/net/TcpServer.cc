@@ -152,7 +152,7 @@ void TcpServer::newConnection(int sockfd, const InetAddress &peerAddr)
     snprintf(buf, sizeof buf, "-%s#%d", ipPort_.c_str(), connId);
     std::string connName = name_ + buf;
 
-    LOG_INFO("TcpServer::newConnection [%s] - new connection [%s] from %s\n",
+    LOG_DEBUG("TcpServer::newConnection [%s] - new connection [%s] from %s\n",
             name_.c_str(), connName.c_str(), peerAddr.toIpPort().c_str());
 
     // 通过 sockfd 获取其绑定的本地 IP 地址和端口号
@@ -216,7 +216,7 @@ void TcpServer::removeConnection(const TcpConnectionPtr &conn)
  */
 void TcpServer::removeConnectionInLoop(const TcpConnectionPtr &conn)
 {
-    LOG_INFO("TcpServer::removeConnectionInLoop [%s] - connection %s\n",
+    LOG_DEBUG("TcpServer::removeConnectionInLoop [%s] - connection %s\n",
             name_.c_str(), conn->name().c_str());
 
     // 从映射表中移除连接

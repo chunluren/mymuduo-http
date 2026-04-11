@@ -45,7 +45,7 @@ public:
 
 private:
     // 初始事件列表容量常量，用于优化内存分配
-    static const int kInitEventListSize = 16;
+    static const int kInitEventListSize = 128;
 
     /**
      * 填充活动通道列表

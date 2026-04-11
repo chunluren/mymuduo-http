@@ -60,7 +60,7 @@ Timestamp EPollPoller::poll(int timeoutMs, ChannelList* activeChannels)
     int numEvents = ::epoll_wait(epollfd_, &*events_.begin(), static_cast<int>(events_.size()), timeoutMs);
     if(numEvents > 0)
     {
-        LOG_INFO("%d events happened\n", numEvents);
+        LOG_DEBUG("%d events happened\n", numEvents);
         // 处理活跃通道
         fillActiveChannels(numEvents, activeChannels);
         // 如果事件数量等于当前容量，则扩容events_容器
@@ -96,7 +96,7 @@ Timestamp EPollPoller::poll(int timeoutMs, ChannelList* activeChannels)
 void EPollPoller::updateChannel(Channel* channel)
 {
     const int index = channel->index();
-    LOG_INFO("func=%s => fd=%d events=%d index=%d \n", __FUNCTION__, channel->fd(), channel->events(), index);
+    LOG_DEBUG("func=%s => fd=%d events=%d index=%d \n", __FUNCTION__, channel->fd(), channel->events(), index);
 
     /**
      * 处理新Channel或已删除的Channel
@@ -166,7 +166,7 @@ void EPollPoller::removeChannel(Channel* channel)
     // 从channels_映射表中移除该文件描述符对应的Channel
     channels_.erase(fd);
     int index = channel->index();
-    LOG_INFO("func=%s => fd=%d\n",__FUNCTION__ ,fd);
+    LOG_DEBUG("func=%s => fd=%d\n",__FUNCTION__ ,fd);
     
     // 如果该Channel已经添加到epoll中，则需要从epoll中删除
     if(index == kAdded)

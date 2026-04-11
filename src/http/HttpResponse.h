@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
-#include <sstream>
+#include <cstdio>
 
 /**
  * @enum HttpStatusCode
@@ -227,46 +227,60 @@ public:
      * @endcode
      */
     std::string toString() const {
-        std::ostringstream oss;
+        std::string result;
+        // Pre-reserve approximate size to avoid reallocations
+        result.reserve(256 + body.size());
 
         // 状态行
-        oss << "HTTP/1.1 " << static_cast<int>(statusCode) << " " << statusMessage << "\r\n";
+        result += "HTTP/1.1 ";
+        result += std::to_string(static_cast<int>(statusCode));
+        result += ' ';
+        result += statusMessage;
+        result += "\r\n";
 
         // 响应头
         for (const auto& [key, value] : headers) {
             if (chunked_ && key == "Content-Length") continue;  // chunked 模式不输出 Content-Length
-            oss << key << ": " << value << "\r\n";
+            result += key;
+            result += ": ";
+            result += value;
+            result += "\r\n";
         }
 
         // Chunked 头
         if (chunked_) {
-            oss << "Transfer-Encoding: chunked\r\n";
+            result += "Transfer-Encoding: chunked\r\n";
         }
 
         // Connection 头
-        oss << "Connection: " << (closeConnection ? "close" : "keep-alive") << "\r\n";
+        result += "Connection: ";
+        result += (closeConnection ? "close" : "keep-alive");
+        result += "\r\n";
 
         // Server 头
-        oss << "Server: mymuduo-http/1.0\r\n";
+        result += "Server: mymuduo-http/1.0\r\n";
 
         // 空行
-        oss << "\r\n";
+        result += "\r\n";
 
         // 响应体
         if (chunked_ && !chunks_.empty()) {
+            char hexbuf[32];
             for (const auto& chunk : chunks_) {
                 if (chunk.empty()) {
-                    oss << "0\r\n\r\n";  // 结束标记
+                    result += "0\r\n\r\n";  // 结束标记
                 } else {
-                    oss << std::hex << chunk.size() << "\r\n";
-                    oss << chunk << "\r\n";
+                    int n = snprintf(hexbuf, sizeof(hexbuf), "%zx\r\n", chunk.size());
+                    result.append(hexbuf, n);
+                    result += chunk;
+                    result += "\r\n";
                 }
             }
         } else {
-            oss << body;
+            result += body;
         }
 
-        return oss.str();
+        return result;
     }
 
     // ==================== 静态工厂方法 ====================

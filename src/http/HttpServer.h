@@ -196,7 +196,11 @@ public:
     void GET(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;  // 启动后不允许注册
         std::unique_lock<std::shared_mutex> lock(routesMutex_);
-        routes_.push_back({HttpMethod::GET, path, handler});
+        if (isExactPath(path)) {
+            exactRoutes_[path][static_cast<int>(HttpMethod::GET)] = handler;
+        } else {
+            routes_.push_back({HttpMethod::GET, path, handler});
+        }
     }
 
     /**
@@ -207,7 +211,11 @@ public:
     void POST(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;
         std::unique_lock<std::shared_mutex> lock(routesMutex_);
-        routes_.push_back({HttpMethod::POST, path, handler});
+        if (isExactPath(path)) {
+            exactRoutes_[path][static_cast<int>(HttpMethod::POST)] = handler;
+        } else {
+            routes_.push_back({HttpMethod::POST, path, handler});
+        }
     }
 
     /**
@@ -218,7 +226,11 @@ public:
     void PUT(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;
         std::unique_lock<std::shared_mutex> lock(routesMutex_);
-        routes_.push_back({HttpMethod::PUT, path, handler});
+        if (isExactPath(path)) {
+            exactRoutes_[path][static_cast<int>(HttpMethod::PUT)] = handler;
+        } else {
+            routes_.push_back({HttpMethod::PUT, path, handler});
+        }
     }
 
     /**
@@ -229,7 +241,11 @@ public:
     void DELETE(const std::string& path, HttpHandler handler) {
         if (started_.load()) return;
         std::unique_lock<std::shared_mutex> lock(routesMutex_);
-        routes_.push_back({HttpMethod::DELETE, path, handler});
+        if (isExactPath(path)) {
+            exactRoutes_[path][static_cast<int>(HttpMethod::DELETE)] = handler;
+        } else {
+            routes_.push_back({HttpMethod::DELETE, path, handler});
+        }
     }
 
     /**
@@ -370,7 +386,9 @@ public:
 private:
     TcpServer server_;                              ///< 底层 TCP 服务器
     EventLoop* loop_;                               ///< 事件循环指针（用于优雅关闭）
-    std::vector<Route> routes_;                     ///< 路由表
+    std::vector<Route> routes_;                     ///< 正则路由表（慢路径）
+    /// 精确匹配路由（快速路径）— 外层 key 为路径，内层 key 为 HttpMethod
+    std::unordered_map<std::string, std::unordered_map<int, HttpHandler>> exactRoutes_;
     std::vector<HttpHandler> middlewares_;          ///< 中间件列表
     std::unordered_map<std::string, std::string> staticDirs_;  ///< 静态文件目录映射
     std::atomic<bool> started_;                     ///< 是否已启动
@@ -393,6 +411,22 @@ private:
             case HttpMethod::HEAD:   return "head";
             default:                 return "unknown";
         }
+    }
+
+    /**
+     * @brief 判断路径是否为精确字符串（不含正则元字符）
+     * @param path URL 路径
+     * @return true 表示可以用 unordered_map 精确匹配
+     */
+    static bool isExactPath(const std::string& path) {
+        for (char c : path) {
+            if (c == '(' || c == ')' || c == '[' || c == ']' ||
+                c == '{' || c == '}' || c == '.' || c == '*' ||
+                c == '+' || c == '?' || c == '|' || c == '^' || c == '$') {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -626,7 +660,17 @@ private:
             }
         }
 
-        // 路由匹配（regex 已在路由注册时编译，匹配不会抛出 std::regex_error）
+        // 快速路径：精确匹配（O(1) 哈希查找）
+        auto pathIt = exactRoutes_.find(request.path);
+        if (pathIt != exactRoutes_.end()) {
+            auto methodIt = pathIt->second.find(static_cast<int>(request.method));
+            if (methodIt != pathIt->second.end()) {
+                methodIt->second(request, response);
+                return;
+            }
+        }
+
+        // 慢路径：正则匹配
         for (const auto& route : routes_) {
             if (route.method == request.method) {
                 if (std::regex_match(request.path, route.regex)) {
