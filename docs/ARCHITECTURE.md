@@ -936,3 +936,26 @@ mymuduo-http 是一个模块化、高性能、易扩展的网络框架：
 | 线程安全 | 原子操作、互斥锁、跨线程调用 |
 
 适用于 Web 服务、RPC 框架、实时通信等场景。
+
+---
+
+## 扩展模块架构
+
+### 中间件管道
+HttpServer 请求处理流程:
+Request → [RateLimit] → [CORS] → [Metrics] → Route Match → Handler → [Gzip] → Response
+
+### 连接池子系统
+MySQLPool / RedisPool: 预创建 + 按需创建 + 空闲回收
+acquire(timeout) → ping检活 → 使用 → release归还
+
+### 安全层
+- HTTPS: Memory BIO + OpenSSL (TLS 1.2+)
+- JWT: HMAC-SHA256 token
+- RateLimiter: 每 IP 限流
+- 路由线程安全: std::shared_mutex
+
+### 可靠性
+- CircuitBreaker: 三态熔断保护下游
+- Graceful Shutdown: 停止接受 → 等待完成 → 关闭
+- ObjectPool: 减少 new/delete 开销

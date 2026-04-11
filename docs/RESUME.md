@@ -4,7 +4,7 @@
 
 ## 基于 C++17 的仿 Muduo 网络库与微服务框架
 
-**项目描述**：使用 C++17 实现仿 Muduo 网络库，基于多 Reactor 多线程模型实现网络库核心模块，并在此基础上构建 HTTP 服务器、双协议 RPC 框架、WebSocket 服务器和服务注册中心。项目总代码量 9,500+ 行（头文件 7,600+，实现文件 1,800+），包含 11 个功能模块、40 个头文件、8 个示例程序。
+**项目描述**：使用 C++17 实现仿 Muduo 网络库，基于多 Reactor 多线程模型实现网络库核心模块，并在此基础上构建 HTTP/HTTPS 服务器、双协议 RPC 框架、WebSocket 服务器和服务注册中心。项目总代码量 14,800+ 行（头文件 12,300+，实现文件 2,400+），包含 11 个功能模块、55 个头文件、23 个测试文件、8 个示例程序。wrk 基准测试在 i5-12400F 上达到 ~100K QPS。
 
 **主要工作**：
 
@@ -28,6 +28,26 @@
 
 10. **内存安全设计**：遵循 RAII 原则，TcpConnection 使用 shared_ptr 管理跨线程生命周期，Channel 通过 weak_ptr（tie 机制）避免循环引用，连接移除采用两阶段销毁保证回调期间对象不被提前析构。
 
+11. **HTTPS/TLS 支持**：基于 OpenSSL Memory BIO 方案实现 TLS 1.2+，避免 SSL_set_fd 与 Reactor fd 冲突。数据流：原始字节 → BIO_write → SSL_read → 明文 → HTTP 处理 → SSL_write → BIO_read → conn->send()。SslContext 封装安全默认配置。
+
+12. **MySQL/Redis 连接池**：MySQLPool 和 RedisPool 支持 min/max 连接数控制、超时等待获取、空闲健康检查。使用 RAII Guard 模式自动归还连接，支持 Prepared Statement 防注入。
+
+13. **Gzip 压缩 + Chunked Transfer**：GzipMiddleware 透明压缩响应体（text/*、application/json、application/javascript），支持请求体解压。Chunked Transfer Encoding 支持流式传输大响应。
+
+14. **限流器**：实现令牌桶（tokens + rate × elapsed，burst 控制突发）和滑动窗口（deque<timestamp>，清除过期后计数判断）两种算法，可按 IP/路由粒度配置。
+
+15. **熔断器 Circuit Breaker**：三态状态机 Closed → Open → HalfOpen，连续失败达阈值后自动熔断，超时后进入半开状态探测恢复，保护下游服务。
+
+16. **Prometheus 监控指标**：Counter/Gauge/Histogram 三种指标类型，/metrics 端点输出标准 Prometheus 格式，支持请求计数、延迟分布、活跃连接数等。
+
+17. **Multipart/form-data 文件上传**：完整解析 multipart 边界、Content-Disposition、文件名/MIME 类型，支持多文件同时上传。
+
+18. **对象池**：通用 ObjectPool<T> 模板，预分配 + 按需扩展，减少高频场景下的 malloc/free 开销，自定义初始化/重置回调。
+
+19. **优雅关闭**：SignalHandler 捕获 SIGINT/SIGTERM，通知 EventLoop 退出循环，等待所有连接处理完毕后关闭，确保数据不丢失。
+
+20. **muduo-im 通信系统**（配套项目）：基于 mymuduo-http 构建的完整 IM 通信软件。JWT 认证、好友/群组/消息管理、WebSocket 实时通信、文件传输、消息撤回、已读回执。前端单文件 SPA，后端 C++ 直接服务。
+
 ---
 
 ## 技术要点
@@ -37,15 +57,21 @@
 | I/O 复用 | Epoll LT 模式 + events_ 动态 2 倍扩容 |
 | 线程模型 | mainReactor + subReactor + EventLoopThreadPool |
 | 跨线程通信 | eventfd 唤醒 + swap 任务队列 + callingPendingFunctors 标志 |
-| HTTP 服务器 | 正则路由预编译 + Peek-Parse-Consume 状态机 + Pipeline |
+| HTTP 服务器 | 正则路由预编译 + O(1) 哈希精确匹配 + Peek-Parse-Consume 状态机 |
+| HTTPS/TLS | OpenSSL Memory BIO + TLS 1.2+ + SslContext 安全配置 |
 | RPC 框架 | JSON-RPC 2.0 + Protobuf-RPC + 长度前缀协议 |
 | WebSocket | RFC 6455 握手 + 帧编解码 + Ping/Pong 心跳 |
+| Gzip 压缩 | zlib deflate/inflate + Content-Encoding + Chunked Transfer |
+| 限流器 | 令牌桶（burst 突发）+ 滑动窗口（deque 时间戳） |
+| 熔断器 | 三态状态机 Closed/Open/HalfOpen + 自动恢复探测 |
+| 连接池 | MySQLPool + RedisPool + RAII Guard + 健康检查 |
+| 监控指标 | Prometheus Counter/Gauge/Histogram + /metrics 端点 |
 | 异步日志 | 双缓冲区 swap 指针 + 条件变量 + 后端刷盘线程 |
 | 定时器 | 时间轮 O(1) + atomic ID 生成 + 哈希表辅助取消 |
 | 服务发现 | REST API + 心跳 TTL + 后台健康检查 |
 | 负载均衡 | 策略模式 + 5 种算法（含平滑加权和一致性哈希） |
 | Buffer | readv + 栈上 64KB 临时缓冲 + 移动/扩容双策略 |
-| 内存管理 | shared_ptr + weak_ptr(tie) + 两阶段连接销毁 |
+| 内存管理 | shared_ptr + weak_ptr(tie) + 两阶段连接销毁 + 对象池 |
 
 ---
 
@@ -53,13 +79,15 @@
 
 | 指标 | 数据 |
 |------|------|
-| 总代码量 | 9,528 行（头文件 7,642 行 + 实现文件 1,886 行） |
+| 总代码量 | 14,800+ 行（头文件 12,300+ 行 + 实现文件 2,400+ 行） |
 | 模块数 | 11 个（net/http/rpc/websocket/registry/balancer/timer/pool/asynclogger/config/util） |
-| 头文件数 | 40 个 |
+| 头文件数 | 55 个 |
+| 测试文件 | 23 个（覆盖全部模块：网络层、HTTP、HTTPS、WebSocket、RPC、连接池、限流、熔断、压缩等） |
 | 示例程序 | 8 个 |
-| 单元测试 | 3 个（负载均衡、注册中心、WebSocket 帧编解码） |
-| C++ 标准 | C++17 |
-| 外部依赖 | Protobuf + OpenSSL + nlohmann/json |
+| 性能基准 | ~100K QPS（wrk 压测，i5-12400F） |
+| C++ 标准 | C++17（header-only 设计，仅 net/ 核心有 .cc） |
+| 外部依赖 | Protobuf + OpenSSL + nlohmann/json + zlib + libmysqlclient + libhiredis |
+| 配套项目 | muduo-im（IM 通信系统：JWT 认证、好友/群组/消息、WebSocket 实时通信、文件传输、消息撤回、已读回执） |
 
 ---
 

@@ -977,3 +977,39 @@ if (len <= 0 || static_cast<size_t>(len) > kMaxFrameSize) {
 - 更大：用 127 标记 + 8 字节扩展长度
 
 绝大多数消息在 125 字节以内，只需要 2 字节帧头（1 字节 FIN+opcode + 1 字节 length），非常高效。
+
+---
+
+### 追问链 8：扩展模块
+
+**Q1: 令牌桶 vs 滑动窗口限流有什么区别？**
+
+**答**：令牌桶以固定速率产生令牌，允许短时间突发消耗积累的令牌，适合需要容忍突发流量的场景。滑动窗口在精确的时间窗口内计数请求，严格保证任意时刻窗口内请求不超限，更精确但不允许突发。我们两种都实现了，默认用令牌桶，需要精确控制时切换为滑动窗口。
+
+**追问 Q2: 熔断器三个状态是什么？怎么转换？**
+
+**答**：三个状态为 Closed（正常）、Open（熔断）、HalfOpen（试探）。Closed 状态下连续失败达到阈值则转 Open；Open 状态持续一段超时时间后转 HalfOpen；HalfOpen 放行一次请求，成功则回 Closed，失败则回 Open。这避免了下游故障时持续发送无意义请求。
+
+**追问 Q3: HTTPS 为什么用 Memory BIO 而不是 SSL_set_fd?**
+
+**答**：SSL_set_fd 会让 OpenSSL 直接操作 fd 的读写，这与 epoll Reactor 模式冲突——Reactor 需要自己管理 fd 上的读写事件。用 Memory BIO 后，加解密在用户态内存缓冲区完成，明文和密文都通过 Buffer 传递，Reactor 仍然完全掌控 fd 的 IO 调度，做到了最小侵入。
+
+**追问 Q4: Gzip 压缩放在什么位置？为什么不压缩图片？**
+
+**答**：Gzip 作为响应发送前的最后一个中间件，对响应体进行压缩。图片（PNG/JPEG/WebP）本身已经是压缩格式，再做 Gzip 不仅无法减小体积，还浪费 CPU，所以通过 Content-Type 判断跳过已压缩的 MIME 类型。
+
+**追问 Q5: 连接池的 acquire 如果池空了怎么办？**
+
+**答**：先检查空闲队列，有则取出并 ping 检活；若空闲队列为空但未达 maxSize，则新建连接返回；若已达 maxSize，用 condition_variable 的 wait_for 阻塞等待指定超时时间，超时仍无可用连接则返回 nullptr，由调用方处理失败。
+
+**追问 Q6: 优雅关闭怎么实现的？**
+
+**答**：收到 SIGINT/SIGTERM 后：(1) 停止 Acceptor 不再接受新连接；(2) 对所有存活连接调用 shutdown 半关闭写端；(3) runAfter 设置超时定时器，超时后调用 loop->quit() 强制退出。这样在超时范围内已有请求能正常完成，超时后保证进程一定退出。
+
+**追问 Q7: 路由匹配怎么优化到 O(1)?**
+
+**答**：将路由分为两组：exactRoutes_ 用 unordered_map<string, Handler> 存储精确路径，查找为 O(1) 哈希；regexRoutes_ 存储带参数/正则的路由做线性匹配。请求先查 exactRoutes_，命中则直接返回；未命中才回退到 regexRoutes_ 遍历。实际场景中 90%+ 请求命中精确路由，整体接近 O(1)。
+
+**追问 Q8: 对象池的 Deleter 是怎么工作的？**
+
+**答**：ObjectPool::acquire() 返回 unique_ptr<T, Deleter>，Deleter 捕获了池的指针。当 unique_ptr 析构时，自定义 Deleter 不会 delete 对象，而是将对象 reset 后放回池的空闲列表。这样使用者无需手动归还，RAII 保证了任何退出路径（包括异常）都能自动归还对象到池中。

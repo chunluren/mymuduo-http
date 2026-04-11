@@ -14,6 +14,11 @@
 6. [异步日志模块](#6-异步日志模块)
 7. [连接池模块](#7-连接池模块)
 8. [面试高频问题](#8-面试高频问题)
+9. [Gzip 压缩实现](#9-gzip-压缩实现)
+10. [HTTPS/TLS 实现](#10-httpstls-实现)
+11. [限流器算法](#11-限流器算法)
+12. [熔断器状态机](#12-熔断器状态机)
+13. [路由优化](#13-路由优化)
 
 ---
 
@@ -1064,8 +1069,318 @@ ConnectionPool 的线程安全机制：
 
 ### Q6: 如果让你继续优化，会做什么？
 
-1. **HTTP/2**：多路复用、头部压缩
-2. **TLS/HTTPS**：SSL 加密传输
-3. **内存池**：减少 malloc/free 开销
-4. **协程**：同步写法实现异步性能
-5. **ET 模式**：减少 epoll_wait 触发次数
+1. **HTTP/2**：多路复用、头部压缩、服务器推送
+2. **协程**：C++20 coroutine，同步写法实现异步性能
+3. **ET 模式**：减少 epoll_wait 触发次数
+4. **io_uring**：Linux 5.1+ 异步 I/O，减少系统调用开销
+
+---
+
+## 9. Gzip 压缩实现
+
+### 9.1 zlib 初始化与压缩流程
+
+使用 zlib 的 `deflateInit2` 配置 gzip 格式（windowBits = 15 + 16），`inflateInit2` 配置自动检测 gzip/deflate：
+
+```cpp
+// GzipMiddleware.h — 压缩
+static std::string compress(const std::string& data, int level = Z_DEFAULT_COMPRESSION)
+{
+    z_stream zs{};
+    // windowBits = 15+16 → gzip 格式（而非 raw deflate）
+    deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+    zs.avail_in = data.size();
+
+    std::string output;
+    char buffer[32768];
+    do {
+        zs.next_out = reinterpret_cast<Bytef*>(buffer);
+        zs.avail_out = sizeof(buffer);
+        deflate(&zs, Z_FINISH);
+        output.append(buffer, sizeof(buffer) - zs.avail_out);
+    } while (zs.avail_out == 0);
+
+    deflateEnd(&zs);
+    return output;
+}
+```
+
+### 9.2 HttpServer 后处理集成
+
+在 HttpServer 发送响应前，检查请求头 `Accept-Encoding` 是否包含 gzip：
+
+```
+请求进入 → 中间件链 → 路由处理 → 后处理:
+  1. 检查 Accept-Encoding 含 "gzip"
+  2. 检查 shouldCompress(Content-Type)
+  3. 压缩 body → 设置 Content-Encoding: gzip
+  4. 更新 Content-Length → 发送
+```
+
+### 9.3 shouldCompress 判断逻辑
+
+只压缩文本类型，二进制（图片/视频/已压缩文件）跳过：
+
+- `text/*`（text/html、text/css、text/plain ...）
+- `application/json`
+- `application/javascript`
+- `application/xml`
+
+阈值：响应体 < 1KB 不压缩（压缩开销大于收益）。
+
+---
+
+## 10. HTTPS/TLS 实现
+
+### 10.1 为什么使用 Memory BIO 方案
+
+传统方式是 `SSL_set_fd(ssl, sockfd)`，让 OpenSSL 直接读写 socket fd。但在 Reactor 模型中，fd 已被 epoll 管理，SSL_set_fd 会与 epoll 冲突（SSL 内部的阻塞读写 vs epoll 非阻塞 I/O）。
+
+**Memory BIO 方案**：在 SSL 和 socket 之间插入内存缓冲区，由应用层控制数据流：
+
+```
+网络层                      SSL 层                    应用层
+────────                    ──────                    ──────
+conn->recv()                                          
+  │                                                    
+  ├── 原始密文 ──→ BIO_write(rbio) ──→ SSL_read() ──→ 明文 HTTP 请求
+  │                                                       │
+  │                                                    HTTP 处理
+  │                                                       │
+  ├── 原始密文 ←── BIO_read(wbio)  ←── SSL_write() ←─ 明文 HTTP 响应
+  │
+conn->send()
+```
+
+### 10.2 握手流程
+
+```cpp
+// SslContext.h — TLS 握手
+void doHandshake(const TcpConnectionPtr& conn, SslState& state, Buffer* buf)
+{
+    BIO_write(state.rbio, buf->peek(), buf->readableBytes());
+    buf->retrieveAll();
+
+    int ret = SSL_do_handshake(state.ssl);
+    // 处理 SSL_ERROR_WANT_READ / SSL_ERROR_WANT_WRITE
+    // 握手产生的输出通过 BIO_read(wbio) 取出并 conn->send()
+
+    flushWbio(conn, state);  // 将 wbio 中的数据发送给客户端
+}
+```
+
+### 10.3 安全配置
+
+SslContext 默认配置：
+- **最低版本**：TLS 1.2（禁用 SSLv3、TLS 1.0/1.1）
+- **禁用选项**：`SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION`
+- **证书/私钥**：从文件加载，支持 PEM 格式
+
+---
+
+## 11. 限流器算法
+
+### 11.1 令牌桶（Token Bucket）
+
+核心思想：以恒定速率往桶中添加令牌，每次请求消耗一个令牌，桶满则丢弃多余令牌。
+
+```cpp
+// RateLimiter.h — TokenBucket
+bool allow()
+{
+    auto now = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(now - lastRefill_).count();
+
+    // 补充令牌：tokens += rate * elapsed，但不超过 burst
+    tokens_ = std::min(static_cast<double>(burst_), tokens_ + rate_ * elapsed);
+    lastRefill_ = now;
+
+    if (tokens_ >= 1.0) {
+        tokens_ -= 1.0;
+        return true;   // 放行
+    }
+    return false;       // 限流
+}
+```
+
+**参数含义**：
+- `rate_`：每秒生成的令牌数（平均速率）
+- `burst_`：桶的最大容量（允许的突发请求数）
+- 优势：允许短时间突发流量，同时保证长期平均速率
+
+### 11.2 滑动窗口（Sliding Window）
+
+核心思想：记录每个请求的时间戳，统计窗口内的请求数。
+
+```cpp
+// RateLimiter.h — SlidingWindow
+bool allow()
+{
+    auto now = std::chrono::steady_clock::now();
+
+    // 清除窗口外的过期时间戳
+    while (!timestamps_.empty() &&
+           now - timestamps_.front() > windowSize_) {
+        timestamps_.pop_front();
+    }
+
+    if (timestamps_.size() < maxRequests_) {
+        timestamps_.push_back(now);
+        return true;   // 放行
+    }
+    return false;       // 限流
+}
+```
+
+**对比**：
+| | 令牌桶 | 滑动窗口 |
+|---|---|---|
+| 突发流量 | 允许（burst 控制上限） | 严格限制 |
+| 内存 | O(1) | O(N)，N = maxRequests |
+| 精度 | 近似平均速率 | 精确计数 |
+| 适用场景 | API 限流、一般保护 | 精确限流、防刷 |
+
+---
+
+## 12. 熔断器状态机
+
+### 12.1 三态转换
+
+```
+                  连续失败 >= threshold
+    ┌─────────┐  ──────────────────→  ┌──────────┐
+    │ Closed  │                       │  Open    │
+    │(正常放行)│  ←──────────────────  │(全部拒绝) │
+    └─────────┘    (不可能直接回来)     └──────────┘
+                                          │
+                                     超时 timeout
+                                          │
+                                          ▼
+                                    ┌───────────┐
+                                    │ HalfOpen  │
+                                    │(探测放行)  │
+                                    └───────────┘
+                                      │       │
+                             连续成功  │       │ 再次失败
+                                      ▼       ▼
+                                  Closed     Open
+```
+
+### 12.2 核心实现
+
+```cpp
+// CircuitBreaker.h
+bool allowRequest()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    switch (state_) {
+    case State::Closed:
+        return true;  // 正常放行
+
+    case State::Open:
+        // 超时后转为 HalfOpen
+        if (now() - lastFailureTime_ > timeout_) {
+            state_ = State::HalfOpen;
+            successCount_ = 0;
+            return true;  // 放一个请求探测
+        }
+        return false;  // 拒绝
+
+    case State::HalfOpen:
+        return true;  // 放行探测请求
+    }
+}
+
+void recordSuccess()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ == State::HalfOpen) {
+        if (++successCount_ >= successThreshold_) {
+            state_ = State::Closed;  // 恢复正常
+            failureCount_ = 0;
+        }
+    } else {
+        failureCount_ = 0;  // 重置失败计数
+    }
+}
+
+void recordFailure()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ == State::HalfOpen) {
+        state_ = State::Open;  // 再次熔断
+        lastFailureTime_ = now();
+    } else {
+        if (++failureCount_ >= failureThreshold_) {
+            state_ = State::Open;  // 触发熔断
+            lastFailureTime_ = now();
+        }
+    }
+}
+```
+
+### 12.3 使用场景
+
+- 保护下游数据库/微服务：连续超时时快速失败，避免级联故障
+- 配合限流器：限流控制流量速率，熔断控制故障隔离
+
+---
+
+## 13. 路由优化
+
+### 13.1 双层路由匹配
+
+HttpServer 使用两层路由结构，优先精确匹配，回退正则匹配：
+
+```cpp
+// HttpServer.h
+std::unordered_map<std::string, RouteHandler> exactRoutes_;  // O(1) 哈希
+std::vector<std::pair<std::regex, RouteHandler>> routes_;     // O(N) 正则
+mutable std::shared_mutex routeMutex_;                        // 读写锁
+```
+
+### 13.2 匹配流程
+
+```cpp
+void route(const std::string& path, /* ... */)
+{
+    std::shared_lock<std::shared_mutex> lock(routeMutex_);  // 读锁
+
+    // 第一步：O(1) 精确匹配
+    auto it = exactRoutes_.find(method + ":" + path);
+    if (it != exactRoutes_.end()) {
+        it->second(req, resp);
+        return;
+    }
+
+    // 第二步：O(N) 正则回退
+    for (auto& [re, handler] : routes_) {
+        std::smatch match;
+        if (std::regex_match(path, match, re)) {
+            handler(req, resp);
+            return;
+        }
+    }
+
+    resp.setStatusCode(404);
+}
+```
+
+### 13.3 读写分离保护
+
+- **读锁**（shared_lock）：路由匹配时使用，多线程并发读不阻塞
+- **写锁**（unique_lock）：注册新路由时使用，排他写入
+- 适合读多写少场景：路由注册只在启动时进行，运行时只有读操作
+
+### 13.4 性能分析
+
+| 路由类型 | 时间复杂度 | 示例 |
+|----------|-----------|------|
+| 精确路由 | O(1) 平均 | `/api/users`、`/api/login` |
+| 正则路由 | O(N) 最坏 | `/api/users/(\d+)`、`/files/(.*)` |
+| 实际场景 | 接近 O(1) | 90%+ 请求命中精确路由 |
+
+大多数 API 路由（RESTful 固定路径）走精确匹配，只有带路径参数的路由走正则回退，因此整体接近 O(1)。

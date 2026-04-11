@@ -7,16 +7,16 @@
 ```
 mymuduo-http/src/
 ├── net/           # 核心网络库（Reactor 模式，含 TcpServer + TcpClient + Connector + Timer 集成）
-├── http/          # HTTP 服务端 + 客户端（HttpServer, HttpClient）
+├── http/          # HTTP/HTTPS 服务端 + 客户端（Gzip、Chunked、Multipart、TLS）
 ├── rpc/           # RPC 框架（JSON-RPC 2.0 + Protobuf-RPC，含 ReactorRpcClient）
 ├── websocket/     # WebSocket 服务端 + 客户端（WebSocketServer, WebSocketClient）
 ├── registry/      # 服务注册与发现
 ├── balancer/      # 负载均衡策略（5 种）
 ├── timer/         # 时间轮定时器（已集成到 EventLoop）
-├── pool/          # TCP 连接池
+├── pool/          # 连接池（TCP + MySQL + Redis）
 ├── asynclogger/   # 双缓冲异步日志
 ├── config/        # INI 格式配置管理
-└── util/          # 工具类（信号处理）
+└── util/          # 工具类（信号处理、限流器、对象池、熔断器、监控指标）
 ```
 
 ---
@@ -1872,4 +1872,550 @@ client.startHeartbeat(key, "inst-001");
 
 auto instances = client.discoverService(key);
 auto selected = client.selectInstance(key, LoadBalancer::Strategy::RoundRobin);
+```
+
+---
+
+## 十二、MySQL 连接池 (pool/MySQLPool.h)
+
+**文件**：`src/pool/MySQLPool.h`
+
+**职责**：MySQL 连接的池化管理，复用连接减少创建/销毁开销，自动健康检查。
+
+**配置**：
+```cpp
+struct MySQLPoolConfig {
+    std::string host = "127.0.0.1";
+    int port = 3306;
+    std::string user = "root";
+    std::string password;
+    std::string database;
+    std::string charset = "utf8mb4";
+    size_t minSize = 5;          // 最小连接数（预创建）
+    size_t maxSize = 20;         // 最大连接数
+    int idleTimeoutSec = 60;     // 空闲超时（秒）
+    int connectTimeoutSec = 5;   // 连接超时（秒）
+};
+```
+
+**MySQLConnection API**：
+```cpp
+using Ptr = std::shared_ptr<MySQLConnection>;
+using ResultPtr = std::unique_ptr<MYSQL_RES, decltype(&mysql_free_result)>;
+
+bool valid() const;                          // 连接是否有效
+bool ping();                                 // 检测连接存活
+ResultPtr query(const std::string& sql);     // 执行查询，返回结果集
+int execute(const std::string& sql);         // 执行 INSERT/UPDATE/DELETE，返回影响行数
+uint64_t lastInsertId();                     // 获取最后插入的自增 ID
+std::string lastError();                     // 获取最后错误信息
+std::string escape(const std::string& str);  // 转义字符串，防止 SQL 注入
+```
+
+**MySQLPool API**：
+```cpp
+MySQLPool(const MySQLPoolConfig& config);
+
+MySQLConnection::Ptr acquire(int timeoutMs = 5000);  // 获取连接（阻塞等待）
+void release(MySQLConnection::Ptr conn);             // 归还连接
+void healthCheck();                                  // 健康检查，清理无效连接
+size_t size() const;                                 // 当前池中连接数
+```
+
+**示例**：
+```cpp
+MySQLPoolConfig config;
+config.host = "127.0.0.1";
+config.database = "mydb";
+config.user = "root";
+config.password = "secret";
+
+MySQLPool pool(config);
+
+auto conn = pool.acquire(5000);
+if (conn && conn->valid()) {
+    auto res = conn->query("SELECT * FROM users WHERE id=1");
+    int affected = conn->execute("UPDATE users SET active=1 WHERE id=1");
+    uint64_t id = conn->lastInsertId();
+    pool.release(conn);
+}
+
+pool.healthCheck();
+```
+
+---
+
+## 十三、Redis 连接池 (pool/RedisPool.h)
+
+**文件**：`src/pool/RedisPool.h`
+
+**职责**：基于 hiredis 的线程安全 Redis 连接池，支持基本的 KV、过期、列表操作。
+
+**配置**：
+```cpp
+struct RedisPoolConfig {
+    std::string host = "127.0.0.1";
+    int port = 6379;
+    std::string password;            // 认证密码（空则不认证）
+    int db = 0;                      // 数据库编号
+    size_t minSize = 5;
+    size_t maxSize = 20;
+    int idleTimeoutSec = 60;
+    int connectTimeoutSec = 5;
+};
+```
+
+**RedisConnection API**：
+```cpp
+using Ptr = std::shared_ptr<RedisConnection>;
+
+bool valid() const;
+bool ping();
+
+std::string get(const std::string& key);
+bool set(const std::string& key, const std::string& value, int ttlSec = 0);
+bool del(const std::string& key);
+bool exists(const std::string& key);
+bool expire(const std::string& key, int seconds);
+long long incr(const std::string& key);
+long long lpush(const std::string& key, const std::string& value);
+std::vector<std::string> lrange(const std::string& key, int start, int stop);
+bool ltrim(const std::string& key, int start, int stop);
+Reply command(const char* fmt, ...);  // 通用命令接口
+```
+
+**RedisPool API**：
+```cpp
+RedisPool(const RedisPoolConfig& config);
+
+RedisConnection::Ptr acquire(int timeoutMs = 5000);
+void release(RedisConnection::Ptr conn);
+void healthCheck();
+size_t size() const;
+```
+
+**示例**：
+```cpp
+RedisPoolConfig config;
+config.host = "127.0.0.1";
+config.port = 6379;
+
+RedisPool pool(config);
+
+auto conn = pool.acquire();
+if (conn && conn->valid()) {
+    conn->set("session:abc", "user_data", 300);  // TTL 300s
+    auto val = conn->get("session:abc");
+    conn->incr("counter:visits");
+    conn->lpush("queue:tasks", "task_payload");
+    pool.release(std::move(conn));
+}
+```
+
+---
+
+## 十四、限流器 (util/RateLimiter.h)
+
+**文件**：`src/util/RateLimiter.h`
+
+**职责**：Per-key 请求限流，提供两种策略：令牌桶（平滑限流）和滑动窗口（固定窗口计数）。线程安全。
+
+**TokenBucketLimiter API**：
+```cpp
+TokenBucketLimiter(double rate, int burst);
+// rate: 每秒补充的令牌数
+// burst: 桶的最大容量（也是初始令牌数）
+
+bool allow(const std::string& key);  // 消耗 1 个令牌，返回是否允许
+```
+
+**SlidingWindowLimiter API**：
+```cpp
+SlidingWindowLimiter(int maxRequests, int windowSec);
+// maxRequests: 窗口内最大请求数
+// windowSec: 窗口时长（秒）
+
+bool allow(const std::string& key);  // 窗口内未超限则允许
+```
+
+**示例**：
+```cpp
+// 令牌桶: 每秒 10 个令牌，突发容量 10
+TokenBucketLimiter limiter(10, 10);
+if (limiter.allow(clientIp)) {
+    handleRequest(req);
+} else {
+    resp.setStatusCode(HttpStatusCode::TOO_MANY_REQUESTS);
+}
+
+// 滑动窗口: 60 秒内最多 100 次请求
+SlidingWindowLimiter windowLimiter(100, 60);
+if (windowLimiter.allow(clientIp)) {
+    handleRequest(req);
+}
+```
+
+---
+
+## 十五、Gzip 压缩中间件 (http/GzipMiddleware.h)
+
+**文件**：`src/http/GzipMiddleware.h`
+
+**职责**：HTTP 响应自动 Gzip 压缩 + 请求解压。基于 zlib，仅对可压缩类型（text/html、application/json 等）生效。
+
+**GzipCodec API**：
+```cpp
+static std::string compress(const std::string& data, int level = Z_DEFAULT_COMPRESSION);
+static std::string decompress(const std::string& data);
+static bool shouldCompress(const std::string& contentType);  // 判断类型是否应压缩
+```
+
+**HttpServer 集成**：
+```cpp
+void HttpServer::enableGzip(size_t minSize = 1024);
+// minSize: 响应体超过此大小才压缩
+```
+
+**示例**：
+```cpp
+EventLoop loop;
+InetAddress addr(8080);
+HttpServer server(&loop, addr, "MyServer");
+
+server.enableGzip(512);  // 响应体 > 512 字节时自动压缩
+
+server.GET("/data", [](const HttpRequest& req, HttpResponse& resp) {
+    resp.setJson(largeJsonPayload);  // 自动 gzip 压缩
+});
+
+server.start();
+loop.loop();
+```
+
+---
+
+## 十六、Chunked Transfer Encoding (http/HttpResponse.h)
+
+**文件**：`src/http/HttpResponse.h`
+
+**职责**：支持 HTTP/1.1 Chunked Transfer Encoding，适用于流式响应或响应体大小未知的场景。
+
+**新增 API**：
+```cpp
+void setChunked(bool enabled);       // 启用 chunked 模式（不输出 Content-Length）
+void addChunk(const std::string& data);  // 添加 chunk 数据，空字符串表示结束
+```
+
+**序列化行为**：
+- 启用后 `toString()` 输出 `Transfer-Encoding: chunked` 头
+- 每个 chunk 以 `{hex_size}\r\n{data}\r\n` 格式编码
+- 最终 chunk `0\r\n\r\n` 表示结束
+
+**示例**：
+```cpp
+server.GET("/stream", [](const HttpRequest& req, HttpResponse& resp) {
+    resp.setStatusCode(HttpStatusCode::OK);
+    resp.setContentType("text/plain");
+    resp.setChunked(true);
+
+    resp.addChunk("Hello ");
+    resp.addChunk("World!");
+    resp.addChunk("");  // 终止 chunk
+});
+```
+
+---
+
+## 十七、通用对象池 (util/ObjectPool.h)
+
+**文件**：`src/util/ObjectPool.h`
+
+**职责**：泛型对象池，减少频繁 new/delete 的开销。RAII 归还——对象离开作用域时自动回池。
+
+**完整公开 API**：
+```cpp
+template<typename T>
+class ObjectPool {
+public:
+    using Ptr = std::unique_ptr<T, Deleter>;  // 自动回池的智能指针
+
+    ObjectPool(size_t initialSize, size_t maxSize = 0);
+    // initialSize: 预创建对象数
+    // maxSize: 最大对象数（0 = initialSize * 2）
+
+    Ptr acquire();                            // 获取对象，池空且未达上限则新建
+    void release(Ptr obj);                    // 显式归还（也可依赖析构自动归还）
+    void setResetFunc(std::function<void(T&)> func);  // 设置归还时的重置函数
+    size_t available() const;                 // 池中可用对象数
+};
+```
+
+**示例**：
+```cpp
+ObjectPool<Buffer> bufferPool(16, 64);
+bufferPool.setResetFunc([](Buffer& b) { b.retrieveAll(); });
+
+{
+    auto buf = bufferPool.acquire();
+    if (buf) {
+        buf->append("data", 4);
+    }
+    // 离开作用域自动归还
+}
+```
+
+---
+
+## 十八、熔断器 (util/CircuitBreaker.h)
+
+**文件**：`src/util/CircuitBreaker.h`
+
+**职责**：防止对故障服务的连续调用，三状态模型：Closed(正常) → Open(熔断) → HalfOpen(试探恢复)。线程安全。
+
+**状态枚举**：
+```cpp
+enum State { Closed, Open, HalfOpen };
+```
+
+**完整公开 API**：
+```cpp
+CircuitBreaker(int failureThreshold, int successThreshold, int timeoutSec);
+// failureThreshold: 连续失败次数达到后进入 Open
+// successThreshold: HalfOpen 下连续成功次数达到后恢复 Closed
+// timeoutSec: Open 状态超时后进入 HalfOpen
+
+State state();                    // 获取当前状态（自动触发 Open→HalfOpen 转换）
+bool allow();                     // 是否允许请求通过
+void recordSuccess();             // 记录成功
+void recordFailure();             // 记录失败
+
+template<typename Func>
+auto execute(Func&& func) -> decltype(func());  // 执行函数并自动记录成功/失败
+```
+
+**示例**：
+```cpp
+CircuitBreaker breaker(5, 3, 30);  // 5 次失败熔断，3 次成功恢复，30s 超时
+
+if (breaker.allow()) {
+    try {
+        auto result = callRemoteService();
+        breaker.recordSuccess();
+    } catch (...) {
+        breaker.recordFailure();
+    }
+}
+
+// 或使用 execute 自动记录
+auto result = breaker.execute([&]() {
+    return callRemoteService();
+});
+```
+
+---
+
+## 十九、HTTPS/TLS (http/SslContext.h + HttpsServer.h)
+
+**文件**：`src/http/SslContext.h`、`src/http/HttpsServer.h`
+
+**职责**：基于 OpenSSL Memory BIO 的 TLS 集成，与 Reactor 非阻塞模型无缝配合。
+
+**SslContext API**：
+```cpp
+SslContext();                                         // 创建 SSL_CTX（最低 TLS 1.2）
+bool loadCert(const std::string& certFile, const std::string& keyFile);  // 加载证书和私钥
+SSL_CTX* get() const;                                // 获取原始 SSL_CTX 指针
+```
+
+**HttpsServer API**（与 HttpServer 路由 API 完全一致）：
+```cpp
+HttpsServer(EventLoop* loop, const InetAddress& addr,
+            const std::string& certFile, const std::string& keyFile,
+            const std::string& name = "HttpsServer");
+
+void GET(const std::string& path, HttpsHandler handler);
+void POST(const std::string& path, HttpsHandler handler);
+void PUT(const std::string& path, HttpsHandler handler);
+void DELETE(const std::string& path, HttpsHandler handler);
+void setThreadNum(int n);
+void start();
+void shutdown(double timeoutSec = 5.0);
+void enableGzip(size_t minSize = 1024);
+```
+
+**示例**：
+```cpp
+EventLoop loop;
+InetAddress addr(443);
+HttpsServer server(&loop, addr, "cert.pem", "key.pem", "MyHttps");
+
+server.GET("/", [](const HttpRequest& req, HttpResponse& resp) {
+    resp.setJson(R"({"message":"Hello HTTPS!"})");
+});
+
+server.setThreadNum(4);
+server.start();
+loop.loop();
+```
+
+---
+
+## 二十、Multipart 文件上传解析 (http/MultipartParser.h)
+
+**文件**：`src/http/MultipartParser.h`
+
+**职责**：解析 `multipart/form-data` 请求体，提取表单字段和上传文件。
+
+**数据结构**：
+```cpp
+struct MultipartPart {
+    std::string name;          // 表单字段名
+    std::string filename;      // 文件名（文本字段为空）
+    std::string contentType;   // 该 part 的 Content-Type
+    std::string data;          // 内容数据（文本或二进制）
+
+    bool isFile() const;       // 是否为文件上传
+};
+```
+
+**MultipartParser API**：
+```cpp
+static std::vector<MultipartPart> parse(const std::string& body, const std::string& boundary);
+static std::string extractBoundary(const std::string& contentType);
+// 从 Content-Type 头提取 boundary（支持带引号格式）
+```
+
+**示例**：
+```cpp
+server.POST("/upload", [](const HttpRequest& req, HttpResponse& resp) {
+    auto boundary = MultipartParser::extractBoundary(req.getHeader("Content-Type"));
+    auto parts = MultipartParser::parse(req.body(), boundary);
+
+    for (const auto& part : parts) {
+        if (part.isFile()) {
+            saveFile(part.filename, part.data);
+        }
+    }
+    resp.setJson(R"({"status":"uploaded"})");
+});
+```
+
+---
+
+## 二十一、Prometheus 监控指标 (util/Metrics.h)
+
+**文件**：`src/util/Metrics.h`
+
+**职责**：线程安全的指标收集系统，支持 Counter/Gauge/Histogram 三种类型，内置 Prometheus 文本格式导出。
+
+**Metrics API**：
+```cpp
+static Metrics& instance();                    // 全局单例
+
+void increment(const std::string& name, int64_t value = 1);  // 递增计数器
+void gauge(const std::string& name, int64_t value);           // 设置 Gauge 瞬时值
+void observe(const std::string& name, double valueMs);        // 记录观测值
+
+int64_t getCounter(const std::string& name);   // 获取计数器值
+int64_t getGauge(const std::string& name);     // 获取 Gauge 值
+std::string toPrometheus();                    // 导出 Prometheus 文本格式
+void reset();                                  // 重置所有指标
+```
+
+**HttpServer 集成**：
+```cpp
+void HttpServer::enableMetrics(const std::string& path = "/metrics");
+// 注册 GET 端点，自动输出 Prometheus 格式指标
+```
+
+**示例**：
+```cpp
+EventLoop loop;
+InetAddress addr(8080);
+HttpServer server(&loop, addr, "MyServer");
+
+server.enableMetrics();  // GET /metrics 输出 Prometheus 格式
+
+server.GET("/api/data", [](const HttpRequest& req, HttpResponse& resp) {
+    auto& m = Metrics::instance();
+    m.increment("http_requests_total");
+    m.observe("request_duration_ms", 12.5);
+    resp.setJson(R"({"data":"value"})");
+});
+
+server.start();
+loop.loop();
+```
+
+---
+
+## 二十二、优雅关闭 (Graceful Shutdown)
+
+**文件**：`src/http/HttpServer.h`、`src/websocket/WebSocketServer.h`
+
+**职责**：停止接受新连接，等待现有连接处理完毕，超时后强制退出事件循环。
+
+**HttpServer API**：
+```cpp
+void HttpServer::shutdown(double timeoutSec = 5.0);
+// 停止接受新连接，timeoutSec 秒后调用 loop->quit() 强制退出
+```
+
+**WebSocketServer API**：
+```cpp
+void WebSocketServer::shutdown(double timeoutSec = 5.0);
+// 同上，适用于 WebSocket 服务端
+```
+
+**示例**：
+```cpp
+HttpServer server(&loop, addr, "MyServer");
+server.start();
+
+// 注册信号处理
+SignalHandler::handle(SIGTERM, [&]() {
+    server.shutdown(10.0);  // 最多等待 10 秒
+});
+
+loop.loop();  // shutdown 超时后自动退出
+```
+
+---
+
+## 二十三、路由优化 (Route Optimization)
+
+**文件**：`src/http/HttpServer.h`
+
+**职责**：O(1) 精确匹配 + 正则回退的两级路由策略，`shared_mutex` 保证读多写少场景下的线程安全。
+
+**实现策略**：
+- **精确路由**：`std::unordered_map<path, std::unordered_map<method, handler>>` — O(1) 哈希查找
+- **正则路由**：当路径包含特殊字符时注册为正则，线性匹配作为 fallback
+- **线程安全**：`std::shared_mutex` 保护路由表，注册时 `unique_lock`，查找时 `shared_lock`
+
+**路由注册行为**：
+```cpp
+// 精确路径 → 进入 exactRoutes_（O(1) 查找）
+server.GET("/api/users", handler);
+
+// 含正则特殊字符 → 进入 routes_（正则匹配）
+server.GET("/api/users/([0-9]+)", handler);
+```
+
+**查找流程**：
+1. 先在 `exactRoutes_` 哈希表中 O(1) 查找精确匹配
+2. 未命中则遍历 `routes_` 进行正则匹配
+3. 全部未命中返回 404
+
+**线程安全保证**：
+```cpp
+mutable std::shared_mutex routesMutex_;
+
+// 注册（启动前）—— 排他锁
+std::unique_lock<std::shared_mutex> lock(routesMutex_);
+exactRoutes_[path][method] = handler;
+
+// 查找（运行时）—— 共享锁
+std::shared_lock<std::shared_mutex> lock(routesMutex_);
+auto it = exactRoutes_.find(request.path);
 ```

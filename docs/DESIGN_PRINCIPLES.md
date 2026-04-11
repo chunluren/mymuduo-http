@@ -1036,3 +1036,23 @@ subLoop 1, 2, 3: 只处理已建立连接
 2. **再看解决方案**：为什么这样设计能解决问题
 3. **对比其他方案**：为什么不选其他方案
 4. **动手实践**：修改代码，观察行为
+
+---
+
+## 新增设计决策
+
+### 为什么限流用中间件而不是独立模块？
+
+限流逻辑与具体业务无关，适合作为横切关注点。用中间件方式实现后，只需 `server.use(rateLimitMiddleware)` 一行代码即可对所有路由生效，无需修改任何 Handler。同时支持按路由粒度配置不同策略，与路由逻辑完全解耦。
+
+### 为什么 Memory BIO 而不是改 TcpConnection？
+
+TcpConnection 是整个框架的核心类，被 HTTP/RPC/WebSocket 所有上层协议依赖。如果在 TcpConnection 里加入 SSL 逻辑，会增加复杂度和所有连接的开销。用 Memory BIO 在 HttpsServer 层做加解密，TcpConnection 完全不感知 TLS 存在，保持核心网络层的稳定和简洁，这是"最小侵入"原则的体现。
+
+### 为什么 ObjectPool 用 unique_ptr + Deleter？
+
+备选方案是让用户手动调用 pool.release(obj)，但这容易遗忘导致泄漏。用 unique_ptr 的自定义 Deleter，对象生命周期由 RAII 管理：作用域结束或异常退出时自动归还池中。调用方像使用普通 unique_ptr 一样，零心智负担，同时获得了池化复用的性能优势。
+
+### 为什么路由区分精确匹配和正则？
+
+绝大多数 API 路由是固定路径（如 `/api/users`、`/api/login`），不需要正则匹配。将精确路由放入 unordered_map 后查找为 O(1)，只有真正需要路径参数（如 `/api/users/:id`）的路由才走正则匹配。这样避免了为每个请求都遍历正则列表的开销，在路由数量增多时性能优势更明显。
