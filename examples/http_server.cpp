@@ -42,7 +42,7 @@ int main() {
     
     // GET /api/hello
     server.GET("/api/hello", [](const HttpRequest& req, HttpResponse& resp) {
-        resp.json(R"({"message": "Hello, World!", "status": "ok"})");
+        resp.setJson(R"({"message": "Hello, World!", "status": "ok"})");
     });
     
     // GET /api/time
@@ -51,19 +51,19 @@ int main() {
         char buf[64];
         strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
         
-        resp.json("{\"time\": \"" + std::string(buf) + "\"}");
+        resp.setJson("{\"time\": \"" + std::string(buf) + "\"}");
     });
     
     // GET /api/echo
     server.GET("/api/echo", [](const HttpRequest& req, HttpResponse& resp) {
         std::string msg = req.params.count("msg") ? req.params.at("msg") : "empty";
-        resp.json("{\"echo\": \"" + msg + "\"}");
+        resp.setJson("{\"echo\": \"" + msg + "\"}");
     });
     
     // POST /api/json
     server.POST("/api/json", [](const HttpRequest& req, HttpResponse& resp) {
         // Echo back the posted JSON
-        resp.json(req.body);
+        resp.setJson(req.body);
     });
     
     // 静态文件

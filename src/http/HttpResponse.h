@@ -88,7 +88,7 @@ public:
      *
      * 初始化状态码为 200 OK，closeConnection 为 false
      */
-    HttpResponse() : statusCode(HttpStatusCode::OK), closeConnection(false) {}
+    HttpResponse() : statusCode(HttpStatusCode::OK), statusMessage("OK"), closeConnection(false) {}
 
     /**
      * @brief 设置状态码
