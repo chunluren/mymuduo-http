@@ -133,6 +133,6 @@ cd build && ./test_buffer   # 单个测试
 所有 4 个阶段 + 额外改进已全部完成:
 - 阶段 1: WebSocketServer 修复、MySQLPool、RedisPool、心跳/超时、限流器
 - 阶段 2: Gzip 压缩、Chunked Transfer、ObjectPool、CircuitBreaker
-- 阶段 3: muduo-im 服务端（JWT、UserService、ChatServer、消息路由）
-- 阶段 4: muduo-im 前端（index.html 单文件 + 静态文件服务）
+- 阶段 3: muduo-im 服务端（JWT、UserService、ChatServer、消息路由、文件上传、消息撤回、已读回执）
+- 阶段 4: muduo-im 前端（index.html 单文件 + 静态文件服务）+ 端到端测试 + WebSocket 压力测试
 - 额外改进: HTTPS/TLS、优雅关闭、Multipart 解析、Prometheus 监控、路由线程安全、路由 O(1) 匹配、请求解压、热路径日志优化、toString 性能优化
