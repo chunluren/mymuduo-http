@@ -182,6 +182,46 @@ void TcpConnection::send(const std::string& message)
     }
 }
 
+void TcpConnection::send(const void* data, size_t len)
+{
+    if(state_ == kConnected)
+    {
+        if(loop_->isInLoopThread())
+        {
+            sendInLoop(data, len);
+        }
+        else
+        {
+            // Must copy for cross-thread safety
+            std::string msg(static_cast<const char*>(data), len);
+            loop_->runInLoop(
+                [self = shared_from_this(), msg = std::move(msg)]() {
+                    self->sendInLoop(msg.c_str(), msg.size());
+                }
+            );
+        }
+    }
+}
+
+void TcpConnection::send(std::string&& message)
+{
+    if(state_ == kConnected)
+    {
+        if(loop_->isInLoopThread())
+        {
+            sendInLoop(message.c_str(), message.size());
+        }
+        else
+        {
+            loop_->runInLoop(
+                [self = shared_from_this(), msg = std::move(message)]() {
+                    self->sendInLoop(msg.c_str(), msg.size());
+                }
+            );
+        }
+    }
+}
+
 void TcpConnection::shutdown()
 {
     if(state_ == kConnected)

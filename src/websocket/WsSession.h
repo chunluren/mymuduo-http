@@ -193,7 +193,7 @@ public:
 private:
     void sendRaw(const std::vector<uint8_t>& data) {
         if (conn_ && conn_->connected()) {
-            conn_->send(std::string(data.begin(), data.end()));
+            conn_->send(data.data(), data.size());  // Zero-copy: use void* overload
         }
     }
 

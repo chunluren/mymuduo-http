@@ -118,6 +118,12 @@ public:
      */
     void send(const std::string& message);
 
+    /// 发送原始数据（避免构造 string）
+    void send(const void* data, size_t len);
+
+    /// 移动语义发送（避免跨线程拷贝）
+    void send(std::string&& message);
+
     /**
      * @brief 关闭写端 (半关闭)
      *

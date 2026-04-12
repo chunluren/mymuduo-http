@@ -42,7 +42,7 @@ ssize_t Buffer::readFd(int fd, int* saveErrno)
 {
     // 栈上的内存空间，64KB
     // 用于处理大数据量的读取
-    char extrabuf[65536] = {0};
+    char extrabuf[65536];  // No need to zero — readv fills it
 
     // 使用 iovec 结构体组织两个缓冲区
     struct iovec vec[2];
