@@ -261,7 +261,7 @@ private:
      */
     void onConnection(const TcpConnectionPtr& conn) {
         if (conn->connected()) {
-            // 创建 SSL 对象和 memory BIO 对
+            /// 新连接建立: 为该连接创建独立的 SSL 对象
             SSL* ssl = SSL_new(sslCtx_.get());
             if (!ssl) {
                 LOG_ERROR("HttpsServer: SSL_new failed for %s", conn->name().c_str());
@@ -269,6 +269,12 @@ private:
                 return;
             }
 
+            /// 创建 memory BIO 对（内存缓冲区 BIO，非 socket BIO）:
+            /// - rbio（read BIO）: 应用将原始 TCP 数据写入此 BIO，
+            ///   OpenSSL 从中读取密文进行解密
+            /// - wbio（write BIO）: OpenSSL 将加密后的数据写入此 BIO，
+            ///   应用从中读出密文并通过 TcpConnection 发送
+            /// 这种方式将 SSL 与 fd 解耦，完全兼容 Reactor 非阻塞模型
             BIO* rbio = BIO_new(BIO_s_mem());
             BIO* wbio = BIO_new(BIO_s_mem());
             if (!rbio || !wbio) {
@@ -280,15 +286,17 @@ private:
                 return;
             }
 
-            // 设置非阻塞 BIO 模式
+            /// 设置非阻塞模式，确保 BIO_read/BIO_write 不会阻塞
             BIO_set_nbio(rbio, 1);
             BIO_set_nbio(wbio, 1);
 
-            // SSL_set_bio 将 BIO 所有权转移给 SSL 对象
+            /// SSL_set_bio 将 BIO 所有权转移给 SSL 对象，
+            /// 后续 SSL_free(ssl) 会自动释放 rbio 和 wbio
             SSL_set_bio(ssl, rbio, wbio);
-            SSL_set_accept_state(ssl);  // 服务端模式
+            /// 设置为 accept 状态（服务端），等待客户端发起 TLS 握手
+            SSL_set_accept_state(ssl);
 
-            // 存储 SSL 连接状态
+            /// 将 SSL 连接状态存入映射表，以连接名为 key
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 auto& sc = sslConns_[conn->name()];
@@ -298,7 +306,7 @@ private:
                 sc.handshakeDone = false;
             }
 
-            // 空闲超时
+            /// 设置空闲超时定时器，超时后自动关闭连接
             if (idleTimeoutSec_ > 0) {
                 auto weakConn = std::weak_ptr<TcpConnection>(conn);
                 conn->getLoop()->runAfter(idleTimeoutSec_, [weakConn]() {
@@ -309,7 +317,7 @@ private:
                 });
             }
         } else {
-            // 连接断开，清理 SSL 资源
+            /// 连接断开: 从映射表中移除，SslConn 析构时自动释放 SSL 资源
             std::lock_guard<std::mutex> lock(mutex_);
             sslConns_.erase(conn->name());
         }
@@ -326,6 +334,7 @@ private:
      * 5. 路由匹配 + 处理 + SSL_write 响应
      */
     void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp /*time*/) {
+        /// 查找该连接对应的 SSL 状态
         SslConn* sc = nullptr;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -334,35 +343,36 @@ private:
             sc = &it->second;
         }
 
-        // 1. Feed raw TCP data into SSL's read BIO
+        /// 第 1 步: 将原始 TCP 密文数据喂入 SSL 的 read BIO
+        /// OpenSSL 后续的 SSL_do_handshake/SSL_read 会从 rbio 中消费这些数据
         size_t rawLen = buf->readableBytes();
         if (rawLen > 0) {
             int written = BIO_write(sc->rbio, buf->peek(), static_cast<int>(rawLen));
             if (written > 0) {
                 buf->retrieve(static_cast<size_t>(written));
             } else {
-                // BIO write failed
                 conn->shutdown();
                 return;
             }
         }
 
-        // 2. Handshake phase
+        /// 第 2 步: TLS 握手阶段
+        /// 握手过程需要多次数据往返（ClientHello -> ServerHello -> ...），
+        /// 每次调用 SSL_do_handshake 后需要将 wbio 中产生的握手响应发出去
         if (!sc->handshakeDone) {
             int ret = SSL_do_handshake(sc->ssl);
-            // Flush any handshake output (ServerHello, Certificate, etc.)
+            /// 刷新握手阶段产生的输出（如 ServerHello、Certificate 等）
             flushSslOutput(conn, sc->wbio);
 
             if (ret == 1) {
-                // Handshake complete
+                /// 握手完成，后续可以进行应用层数据传输
                 sc->handshakeDone = true;
             } else {
                 int err = SSL_get_error(sc->ssl, ret);
                 if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
-                    // Need more data from client to continue handshake
+                    /// 握手尚未完成，需要等待客户端发送更多握手数据
                     return;
                 }
-                // Handshake failed
                 LOG_ERROR("HttpsServer: SSL handshake failed for %s (err=%d)",
                           conn->name().c_str(), err);
                 conn->shutdown();
@@ -370,39 +380,42 @@ private:
             }
         }
 
-        // 3. Read decrypted application data
+        /// 第 3 步: 从 SSL 层读取已解密的应用层明文数据
+        /// SSL_read 从 rbio 中消费密文，解密后返回明文
+        /// 循环读取直到无更多数据可读（SSL_ERROR_WANT_READ）
         char plaintext[16384];
         int n;
         while ((n = SSL_read(sc->ssl, plaintext, sizeof(plaintext))) > 0) {
             sc->pendingPlaintext.append(plaintext, n);
         }
 
-        // Check for SSL errors after SSL_read
+        /// 检查 SSL_read 的错误状态
         if (n <= 0) {
             int err = SSL_get_error(sc->ssl, n);
             if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE &&
                 err != SSL_ERROR_ZERO_RETURN) {
-                // Fatal SSL error
+                /// 致命 SSL 错误，关闭连接
                 conn->shutdown();
                 return;
             }
             if (err == SSL_ERROR_ZERO_RETURN) {
-                // Peer sent close_notify
+                /// 对端发送了 close_notify，正常关闭
                 conn->shutdown();
                 return;
             }
         }
 
-        // 4. Parse HTTP requests from accumulated plaintext
+        /// 第 4 步: 从累积的明文中解析 HTTP 请求
+        /// 可能一次 TCP 消息包含多个完整 HTTP 请求（HTTP 流水线），
+        /// 因此用 while 循环持续尝试解析
         while (!sc->pendingPlaintext.empty()) {
             HttpRequest request;
             ParseResult result = parseHttpRequest(sc->pendingPlaintext, request);
 
             if (result == ParseResult::Incomplete) {
-                // Wait for more data
+                /// 数据不完整，等待后续 TCP 数据到达
                 break;
             } else if (result == ParseResult::Error) {
-                // Send 400 Bad Request
                 HttpResponse resp = HttpResponse::badRequest("Bad Request");
                 resp.closeConnection = true;
                 sslWrite(conn, sc, resp.toString());
@@ -410,11 +423,11 @@ private:
                 return;
             }
 
-            // 5. Handle the request
+            /// 第 5 步: 路由匹配 + 中间件处理 + 生成响应
             HttpResponse response;
             handleRequest(request, response);
 
-            // Gzip compression
+            /// Gzip 压缩: 仅当响应体超过最小阈值且客户端支持 gzip 时压缩
             if (gzipEnabled_ && response.body.size() >= gzipMinSize_) {
                 std::string acceptEncoding = request.getHeader("accept-encoding");
                 if (acceptEncoding.find("gzip") != std::string::npos) {
@@ -432,12 +445,12 @@ private:
                 }
             }
 
-            // Send response
+            /// 通过 SSL 加密后发送 HTTP 响应
             response.closeConnection = !request.keepAlive();
             sslWrite(conn, sc, response.toString());
 
             if (response.closeConnection) {
-                // Send SSL close_notify before TCP shutdown
+                /// 发送 SSL close_notify 优雅关闭 TLS 会话，再关闭 TCP
                 SSL_shutdown(sc->ssl);
                 flushSslOutput(conn, sc->wbio);
                 conn->shutdown();
@@ -456,8 +469,11 @@ private:
      * 读取 OpenSSL 产生的所有待发送加密数据，通过 TcpConnection 发送。
      */
     void flushSslOutput(const TcpConnectionPtr& conn, BIO* wbio) {
-        char buf[16384];
+        char buf[16384];  ///< 16KB 缓冲区，分块读取 BIO 中的加密数据
         int pending;
+        /// 循环读取 wbio 中所有待发送的加密数据:
+        /// BIO_ctrl_pending 返回 wbio 中可读的字节数，
+        /// BIO_read 将数据拷贝到 buf 中，再通过 TCP 连接发送给客户端
         while ((pending = BIO_ctrl_pending(wbio)) > 0) {
             int n = BIO_read(wbio, buf, std::min(pending, static_cast<int>(sizeof(buf))));
             if (n > 0) {

@@ -43,17 +43,23 @@ public:
      * - 禁用 SSLv2/SSLv3
      */
     SslContext() {
-        // OpenSSL 1.1.0+ 自动初始化，但显式调用保证兼容性
+        /// OpenSSL 1.1.0+ 已自动初始化，显式调用是为了兼容旧版本
         SSL_library_init();
         SSL_load_error_strings();
         OpenSSL_add_all_algorithms();
 
+        /// 使用 TLS_server_method() 创建服务端 SSL 上下文，
+        /// 该方法支持 TLS 1.0 ~ TLS 1.3 的所有版本协商
         ctx_ = SSL_CTX_new(TLS_server_method());
         if (!ctx_) {
             throw std::runtime_error("Failed to create SSL_CTX: " + getOpenSslError());
         }
 
-        // 安全默认设置
+        /// 安全默认设置:
+        /// - 最低协议版本设为 TLS 1.2，拒绝不安全的旧协议
+        /// - SSL_OP_NO_SSLv2/SSLv3: 双重保险禁用 SSLv2/v3
+        /// - SSL_OP_NO_COMPRESSION: 禁用 TLS 压缩（防止 CRIME 攻击）
+        /// - SSL_OP_CIPHER_SERVER_PREFERENCE: 优先使用服务端的密码套件顺序
         SSL_CTX_set_min_proto_version(ctx_, TLS1_2_VERSION);
         SSL_CTX_set_options(ctx_, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
                                   SSL_OP_NO_COMPRESSION |
@@ -96,12 +102,15 @@ public:
      * 加载顺序: 证书 -> 私钥 -> 验证匹配
      */
     bool loadCert(const std::string& certFile, const std::string& keyFile) {
+        /// 第一步: 加载 PEM 格式的服务端证书（包含公钥）
         if (SSL_CTX_use_certificate_file(ctx_, certFile.c_str(), SSL_FILETYPE_PEM) <= 0) {
             return false;
         }
+        /// 第二步: 加载 PEM 格式的私钥文件
         if (SSL_CTX_use_PrivateKey_file(ctx_, keyFile.c_str(), SSL_FILETYPE_PEM) <= 0) {
             return false;
         }
+        /// 第三步: 验证私钥与证书是否匹配（公钥/私钥对一致性检查）
         if (SSL_CTX_check_private_key(ctx_) != 1) {
             return false;
         }

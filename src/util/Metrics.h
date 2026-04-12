@@ -38,9 +38,12 @@ public:
     }
 
     /**
-     * @brief 增加计数器
+     * @brief 增加计数器（Counter 类型指标）
      * @param name 计数器名称（如 "http_requests_total"）
      * @param value 增量（默认 1）
+     *
+     * Counter 只能单调递增，适用于统计累计事件数量（如请求总数、错误数）。
+     * 线程安全: 内部使用 mutex 保护 counters_ 映射表。
      */
     void increment(const std::string& name, int64_t value = 1) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -48,9 +51,12 @@ public:
     }
 
     /**
-     * @brief 设置 Gauge 值
+     * @brief 设置 Gauge 值（Gauge 类型指标）
      * @param name Gauge 名称（如 "active_connections"）
      * @param value 当前值
+     *
+     * Gauge 可增可减，表示某个瞬时状态值（如当前活跃连接数、内存占用量）。
+     * 每次调用直接覆盖旧值，而非累加。
      */
     void gauge(const std::string& name, int64_t value) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -58,9 +64,14 @@ public:
     }
 
     /**
-     * @brief 记录观测值（毫秒）
+     * @brief 记录观测值（Histogram/Summary 类型指标）
      * @param name 指标名称（如 "request_duration_ms"）
      * @param valueMs 观测值（毫秒）
+     *
+     * 用于记录耗时分布等需要统计聚合的指标。
+     * 内部维护 count（观测次数）和 sum（累计值），
+     * 导出时以 Prometheus summary 格式输出 _count 和 _sum 两个子指标。
+     * 例: request_duration_ms_count = 100, request_duration_ms_sum = 1234.5
      */
     void observe(const std::string& name, double valueMs) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -92,26 +103,34 @@ public:
     }
 
     /**
-     * @brief 导出所有指标为 Prometheus text 格式
+     * @brief 导出所有指标为 Prometheus text exposition 格式
      * @return Prometheus exposition format 字符串
+     *
+     * 输出格式遵循 Prometheus text-based exposition format 规范:
+     * - 每个指标先输出 "# TYPE <name> <type>" 元数据行
+     * - Counter: 输出 "<name> <value>"
+     * - Gauge: 输出 "<name> <value>"
+     * - Summary: 输出 "<name>_count <N>" 和 "<name>_sum <total>"
+     *
+     * 通常挂载在 /metrics 端点供 Prometheus 定期抓取。
      */
     std::string toPrometheus() const {
         std::lock_guard<std::mutex> lock(mutex_);
         std::ostringstream oss;
 
-        // Counters
+        /// 导出所有 Counter 类型指标
         for (const auto& [name, value] : counters_) {
             oss << "# TYPE " << name << " counter\n";
             oss << name << " " << value << "\n";
         }
 
-        // Gauges
+        /// 导出所有 Gauge 类型指标
         for (const auto& [name, value] : gauges_) {
             oss << "# TYPE " << name << " gauge\n";
             oss << name << " " << value << "\n";
         }
 
-        // Histograms (as summary: count + sum)
+        /// 导出所有 Histogram/Summary 类型指标（count + sum 两个子指标）
         for (const auto& [name, data] : histograms_) {
             oss << "# TYPE " << name << " summary\n";
             oss << name << "_count " << data.count << "\n";

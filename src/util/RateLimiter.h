@@ -43,9 +43,17 @@ public:
         : rate_(rate), burst_(burst) {}
 
     /**
-     * @brief Check if a request is allowed for the given key
-     * @param key Identifier for rate limiting (e.g., client IP)
-     * @return true if request is allowed, false if rate limited
+     * @brief 判断指定 key 的请求是否被允许（令牌桶算法）
+     * @param key 限流标识符（如客户端 IP 地址）
+     * @return true 请求放行，false 请求被限流
+     *
+     * 算法逻辑:
+     * 1. 首次请求: 创建满桶（burst 个令牌），消耗 1 个后立即放行
+     * 2. 后续请求: 根据距上次访问的时间差，按 rate（令牌/秒）补充令牌，
+     *    令牌总量不超过 burst 上限
+     * 3. 若桶中令牌 >= 1.0，消耗 1 个令牌并放行；否则拒绝
+     *
+     * 特点: 允许短时间突发流量（burst），同时限制长期平均速率（rate）
      */
     bool allow(const std::string& key) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -54,7 +62,7 @@ public:
         auto it = buckets_.find(key);
 
         if (it == buckets_.end()) {
-            // First request for this key: start with full bucket, consume 1
+            /// 该 key 的首次请求: 初始化满桶，消耗 1 个令牌
             Bucket bucket;
             bucket.tokens = static_cast<double>(burst_) - 1.0;
             bucket.lastTime = now;
@@ -64,19 +72,19 @@ public:
 
         Bucket& bucket = it->second;
 
-        // Refill tokens based on elapsed time
+        /// 按时间差补充令牌: elapsed（秒） * rate_（令牌/秒），上限为 burst_
         double elapsed = static_cast<double>(now - bucket.lastTime) / 1000.0;
         bucket.tokens = std::min(static_cast<double>(burst_),
                                   bucket.tokens + elapsed * rate_);
         bucket.lastTime = now;
 
-        // Try to consume 1 token
+        /// 尝试消耗 1 个令牌
         if (bucket.tokens >= 1.0) {
             bucket.tokens -= 1.0;
             return true;
         }
 
-        return false;
+        return false;  ///< 令牌不足，拒绝请求
     }
 
 private:
@@ -116,9 +124,18 @@ public:
         : maxRequests_(maxRequests), windowMs_(windowSec * 1000) {}
 
     /**
-     * @brief Check if a request is allowed for the given key
-     * @param key Identifier for rate limiting (e.g., client IP)
-     * @return true if request is allowed, false if rate limited
+     * @brief 判断指定 key 的请求是否被允许（滑动窗口算法）
+     * @param key 限流标识符（如客户端 IP 地址）
+     * @return true 请求放行，false 请求被限流
+     *
+     * 算法逻辑:
+     * 1. 维护一个双端队列（deque），记录每次请求的时间戳
+     * 2. 每次请求时，先清除窗口外（超过 windowMs_ 毫秒前）的过期记录
+     * 3. 若窗口内的请求数 < maxRequests_，记录本次时间戳并放行
+     * 4. 否则拒绝请求
+     *
+     * 特点: 精确统计滑动窗口内的请求数量，不存在令牌桶的突发问题，
+     * 但内存开销与请求数成正比（每个请求占用一个时间戳记录）
      */
     bool allow(const std::string& key) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -126,19 +143,19 @@ public:
         auto now = nowMs();
         auto& window = windows_[key];
 
-        // Clean expired entries
+        /// 清除超出时间窗口的过期记录（从队列头部移除）
         int64_t cutoff = now - windowMs_;
         while (!window.empty() && window.front() <= cutoff) {
             window.pop_front();
         }
 
-        // Check if within limit
+        /// 窗口内请求数未超限，记录本次请求时间戳并放行
         if (static_cast<int>(window.size()) < maxRequests_) {
             window.push_back(now);
             return true;
         }
 
-        return false;
+        return false;  ///< 窗口内请求数已达上限，拒绝请求
     }
 
 private:

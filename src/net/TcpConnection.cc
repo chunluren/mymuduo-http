@@ -182,6 +182,14 @@ void TcpConnection::send(const std::string& message)
     }
 }
 
+/**
+ * @brief 发送原始数据（零拷贝优化版）
+ * @param data 数据指针
+ * @param len 数据长度
+ *
+ * 避免构造 std::string 的开销。同线程直接发送，
+ * 跨线程时需要拷贝一次（因为原始指针可能在发送前失效）。
+ */
 void TcpConnection::send(const void* data, size_t len)
 {
     if(state_ == kConnected)
@@ -192,7 +200,8 @@ void TcpConnection::send(const void* data, size_t len)
         }
         else
         {
-            // Must copy for cross-thread safety
+            /// 跨线程发送：原始指针可能在 runInLoop 执行前被释放，
+            /// 必须拷贝到 std::string 中以保证数据生命周期安全
             std::string msg(static_cast<const char*>(data), len);
             loop_->runInLoop(
                 [self = shared_from_this(), msg = std::move(msg)]() {
@@ -203,6 +212,14 @@ void TcpConnection::send(const void* data, size_t len)
     }
 }
 
+/**
+ * @brief 发送数据（移动语义优化版）
+ * @param message 待发送的消息（右值引用，避免不必要的拷贝）
+ *
+ * 接受右值引用，在跨线程场景下通过 std::move 将数据转移到
+ * IO 线程的回调闭包中，减少一次深拷贝。
+ * 同线程则直接使用原始数据发送，无需额外拷贝。
+ */
 void TcpConnection::send(std::string&& message)
 {
     if(state_ == kConnected)
@@ -213,6 +230,8 @@ void TcpConnection::send(std::string&& message)
         }
         else
         {
+            /// 利用 std::move 将 message 移动到闭包中，
+            /// 避免跨线程时的深拷贝开销
             loop_->runInLoop(
                 [self = shared_from_this(), msg = std::move(message)]() {
                     self->sendInLoop(msg.c_str(), msg.size());

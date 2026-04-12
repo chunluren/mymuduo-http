@@ -67,47 +67,49 @@ public:
             return parts;
         }
 
+        /// multipart 消息格式中，每个 part 由 "--boundary" 分隔，
+        /// 消息以 "--boundary--" 结束（RFC 2046）
         std::string delimiter = "--" + boundary;
         std::string endDelimiter = delimiter + "--";
 
-        // Find first delimiter
+        /// 定位第一个分隔符的位置
         size_t pos = body.find(delimiter);
         if (pos == std::string::npos) {
             return parts;
         }
 
-        // Skip past first delimiter line
+        /// 跳过第一个分隔符行（delimiter + \r\n），定位到第一个 part 的起始位置
         pos = body.find("\r\n", pos);
         if (pos == std::string::npos) {
             return parts;
         }
-        pos += 2; // skip \r\n
+        pos += 2; // 跳过 \r\n
 
         while (pos < body.size()) {
-            // Find end of this part (next delimiter)
+            /// 查找下一个分隔符，两个分隔符之间即为一个 part 的完整内容
             size_t nextDelim = body.find(delimiter, pos);
             if (nextDelim == std::string::npos) {
                 break;
             }
 
-            // Extract this part's content (headers + body)
+            /// 提取当前 part 的内容（包含 headers + \r\n\r\n + body）
             std::string partContent = body.substr(pos, nextDelim - pos);
 
-            // Parse the part
+            /// 解析单个 part（分离 headers 和 body，提取 name/filename 等字段）
             MultipartPart part = parsePart(partContent);
             if (!part.name.empty()) {
                 parts.push_back(std::move(part));
             }
 
-            // Move past the delimiter
+            /// 移动到当前分隔符之后
             pos = nextDelim + delimiter.size();
 
-            // Check if this is the end delimiter
+            /// 检查是否为结束分隔符 "--boundary--"
             if (pos + 2 <= body.size() && body.substr(pos, 2) == "--") {
-                break; // end of multipart
+                break; // 所有 part 解析完毕
             }
 
-            // Skip \r\n after delimiter
+            /// 跳过分隔符后的 \r\n，定位到下一个 part 的起始位置
             if (pos + 2 <= body.size() && body.substr(pos, 2) == "\r\n") {
                 pos += 2;
             }
@@ -126,6 +128,7 @@ public:
      * - boundary=----WebKitFormBoundary
      */
     static std::string extractBoundary(const std::string& contentType) {
+        /// 在 Content-Type 头中查找 "boundary=" 关键字
         std::string key = "boundary=";
         size_t pos = contentType.find(key);
         if (pos == std::string::npos) {
@@ -133,7 +136,7 @@ public:
         }
         pos += key.size();
 
-        // Boundary may be quoted
+        /// 处理带引号的 boundary 值: boundary="----WebKitFormBoundary..."
         if (pos < contentType.size() && contentType[pos] == '"') {
             pos++;
             size_t end = contentType.find('"', pos);
@@ -143,7 +146,8 @@ public:
             return contentType.substr(pos, end - pos);
         }
 
-        // Unquoted: read until whitespace or semicolon or end
+        /// 处理不带引号的 boundary 值: boundary=----WebKitFormBoundary...
+        /// 读取直到遇到空格、分号、换行符或字符串末尾
         size_t end = pos;
         while (end < contentType.size() && contentType[end] != ' ' &&
                contentType[end] != ';' && contentType[end] != '\r' && contentType[end] != '\n') {
