@@ -26,7 +26,7 @@
 
 9. **TCP 连接池**：支持 min/max 连接数控制（默认 5/20）、超时等待获取（默认 5s）、空闲连接健康检查清理。使用 mutex + condition_variable 实现线程安全的获取/归还。
 
-10. **内存安全设计**：遵循 RAII 原则，TcpConnection 使用 shared_ptr 管理跨线程生命周期，Channel 通过 weak_ptr（tie 机制）避免循环引用，连接移除采用两阶段销毁保证回调期间对象不被提前析构。
+10. **内存安全设计**：遵循 RAII 原则，TcpConnection 使用 shared_ptr 管理跨线程生命周期，Channel 通过 weak_ptr（tie 机制）避免循环引用，连接移除采用两阶段销毁保证回调期间对象不被提前析构。发送路径零拷贝优化：新增 `send(const void*, size_t)` 和 `send(string&&)` 重载，WebSocket 发送避免 vector→string 中间拷贝，跨线程发送使用移动语义。
 
 11. **HTTPS/TLS 支持**：基于 OpenSSL Memory BIO 方案实现 TLS 1.2+，避免 SSL_set_fd 与 Reactor fd 冲突。数据流：原始字节 → BIO_write → SSL_read → 明文 → HTTP 处理 → SSL_write → BIO_read → conn->send()。SslContext 封装安全默认配置。
 

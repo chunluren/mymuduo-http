@@ -19,6 +19,7 @@
 11. [限流器算法](#11-限流器算法)
 12. [熔断器状态机](#12-熔断器状态机)
 13. [路由优化](#13-路由优化)
+14. [发送路径零拷贝优化](#14-发送路径零拷贝优化)
 
 ---
 
@@ -1384,3 +1385,39 @@ void route(const std::string& path, /* ... */)
 | 实际场景 | 接近 O(1) | 90%+ 请求命中精确路由 |
 
 大多数 API 路由（RESTful 固定路径）走精确匹配，只有带路径参数的路由走正则回退，因此整体接近 O(1)。
+
+---
+
+## 14. 发送路径零拷贝优化
+
+### 优化前的问题
+
+WebSocket 消息发送路径存在多次不必要的内存拷贝：
+
+```
+sendText("hello")
+  → encodeText()                  ← 分配 vector<uint8_t>
+  → sendRaw(vector)
+    → string(data.begin(), end()) ← 拷贝 #1: vector→string
+    → conn_->send(string)
+      → [跨线程] msg = message    ← 拷贝 #2: 值捕获
+      → sendInLoop → write()
+```
+
+### 优化方案
+
+1. **`send(const void*, size_t)` 重载**：直接接受原始指针，避免构造 string
+2. **`send(string&&)` 移动语义**：跨线程发送时用 std::move 避免拷贝
+3. **WsSession::sendRaw**：改用 `conn_->send(data.data(), data.size())` 替代 `string(begin, end)` 拷贝
+4. **Buffer::readFd**：去掉 extrabuf 64KB 清零（readv 不需要预初始化）
+
+### 优化后
+
+```
+sendText("hello")
+  → encodeText()                  ← vector<uint8_t>（不变）
+  → sendRaw(vector)
+    → conn_->send(data.data(), len) ← 零拷贝：直接传指针
+      → [同线程] sendInLoop → write()
+      → [跨线程] string(ptr, len) + move ← 仅一次拷贝
+```

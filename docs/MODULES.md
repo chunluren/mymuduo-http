@@ -365,6 +365,10 @@ using WriteCompleteCallback = std::function<void(const TcpConnectionPtr&)>;
 using HighWaterMarkCallback = std::function<void(const TcpConnectionPtr&, size_t)>;
 ```
 
+**发送优化 API:**
+- `send(const void* data, size_t len)` — 原始数据发送，避免 string 构造
+- `send(std::string&& message)` — 移动语义，跨线程零拷贝
+
 **设计要点**：
 - 使用 `shared_ptr` 管理，通过 `shared_from_this()` 保证回调期间对象存活
 - 支持高水位回调：当输出缓冲区积压超过阈值时触发，可用于限流
