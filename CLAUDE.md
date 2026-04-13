@@ -136,4 +136,5 @@ cd build && ./test_buffer   # 单个测试
 - 阶段 3: muduo-im 服务端（JWT、UserService、ChatServer、消息路由、文件上传、消息撤回、已读回执）
 - 阶段 4: muduo-im 前端（index.html 单文件 + 静态文件服务）+ 端到端测试 + WebSocket 压力测试
 - P0-P3 审计修复: 好友申请制、群组退出/解散、用户资料/密码/注销、正在输入提示、消息长度校验、文件上传限制（50MB + 类型白名单）、消息撤回软删除、Redis 降级回退、未读计数、搜索用户
+- 功能扩展: 配置文件支持（config.ini）、消息搜索、表情包选择器、图片消息内联预览、消息引用/回复、群公告、踢人、已读回执持久化（Redis）、消息幂等投递（msgId 去重）、离线未读同步、HTTP 请求限流（100 req/s per IP）、C++ WebSocket 压测客户端
 - 额外改进: HTTPS/TLS、优雅关闭、Multipart 解析、Prometheus 监控、路由线程安全、路由 O(1) 匹配、请求解压、热路径日志优化、toString 性能优化
