@@ -166,6 +166,24 @@ public:
         return result;
     }
 
+    /// 开始事务
+    bool beginTransaction() {
+        if (!mysql_) return false;
+        return mysql_query(mysql_, "BEGIN") == 0;
+    }
+
+    /// 提交事务
+    bool commit() {
+        if (!mysql_) return false;
+        return mysql_query(mysql_, "COMMIT") == 0;
+    }
+
+    /// 回滚事务
+    bool rollback() {
+        if (!mysql_) return false;
+        return mysql_query(mysql_, "ROLLBACK") == 0;
+    }
+
     /**
      * @brief 获取原始 MYSQL* 句柄
      */
@@ -188,6 +206,54 @@ public:
 private:
     MYSQL* mysql_;          ///< MySQL 句柄
     int64_t lastUsed_;      ///< 最后使用时间 (秒)
+};
+
+/**
+ * @class TransactionGuard
+ * @brief RAII 事务守卫 — 析构时若未 commit 则自动 rollback
+ *
+ * 使用示例：
+ *   {
+ *       TransactionGuard tx(conn);
+ *       if (!tx.active()) return;
+ *       conn->execute("UPDATE ...");
+ *       conn->execute("INSERT ...");
+ *       tx.commit();  // 成功则提交
+ *   }  // 若抛异常或没 commit，析构时自动回滚
+ */
+class TransactionGuard {
+public:
+    explicit TransactionGuard(MySQLConnection::Ptr conn)
+        : conn_(conn), committed_(false), began_(false)
+    {
+        if (conn_ && conn_->valid()) {
+            began_ = conn_->beginTransaction();
+        }
+    }
+
+    ~TransactionGuard() {
+        if (began_ && !committed_ && conn_ && conn_->valid()) {
+            conn_->rollback();
+        }
+    }
+
+    TransactionGuard(const TransactionGuard&) = delete;
+    TransactionGuard& operator=(const TransactionGuard&) = delete;
+
+    /// 显式提交（成功返回 true）
+    bool commit() {
+        if (!began_ || committed_ || !conn_) return false;
+        committed_ = conn_->commit();
+        return committed_;
+    }
+
+    /// 事务是否成功开启
+    bool active() const { return began_; }
+
+private:
+    MySQLConnection::Ptr conn_;
+    bool committed_;
+    bool began_;
 };
 
 /**
