@@ -1926,6 +1926,24 @@ void healthCheck();                                  // 健康检查，清理无
 size_t size() const;                                 // 当前池中连接数
 ```
 
+#### 事务支持 (新增)
+
+**MySQLConnection** 新增方法：
+- `beginTransaction()` — 开启事务（执行 BEGIN）
+- `commit()` — 提交事务
+- `rollback()` — 回滚事务
+
+**TransactionGuard** — RAII 事务守卫，析构时若未 commit 则自动 rollback：
+
+```cpp
+auto conn = pool.acquire();
+TransactionGuard tx(conn);
+if (!tx.active()) return;
+conn->execute("UPDATE ...");
+conn->execute("INSERT ...");
+tx.commit();  // 不 commit 则析构时自动 rollback
+```
+
 **示例**：
 ```cpp
 MySQLPoolConfig config;
@@ -2167,6 +2185,12 @@ bufferPool.setResetFunc([](Buffer& b) { b.retrieveAll(); });
     // 离开作用域自动归还
 }
 ```
+
+#### 生命周期安全 (v2)
+
+Deleter 持有 `weak_ptr<PoolCore>` 而非裸指针。
+即使 ObjectPool 在 Ptr 之前析构，Ptr 析构时 `weak_ptr.lock()` 返回 null，
+Deleter 会直接 delete 对象而非访问已销毁的池（防止 UAF）。
 
 ---
 

@@ -1421,3 +1421,54 @@ sendText("hello")
       → [同线程] sendInLoop → write()
       → [跨线程] string(ptr, len) + move ← 仅一次拷贝
 ```
+
+---
+
+## 15. ObjectPool UAF 防护设计
+
+### 问题
+
+早期版本：`Deleter` 持有 `ObjectPool<T>*` 裸指针。若 `ObjectPool` 在 `Ptr` 之前析构，`Ptr` 析构时 Deleter 调用已销毁 pool 的 `releaseRaw()` → Use-After-Free。
+
+### 解决方案
+
+1. 把状态剥离到 `PoolCore` 结构体（vector + mutex + resetFunc）
+2. `ObjectPool` 用 `shared_ptr<PoolCore>` 管理
+3. `Deleter` 改持 `weak_ptr<PoolCore>`
+4. Ptr 析构时 `weak.lock()`：
+   - 成功（池存活）：重置 + 归还到 core->pool
+   - 失败（池销毁）：直接 `delete` 对象
+
+### 验证
+
+AddressSanitizer 回归测试：`testPoolDestroyedBeforePtr()` 在池销毁后让 Ptr 析构，
+ASan 无 UAF 报告。
+
+## 16. TransactionGuard RAII
+
+### 设计
+
+```cpp
+class TransactionGuard {
+    MySQLConnection::Ptr conn_;
+    bool committed_ = false;
+    bool began_ = false;
+public:
+    explicit TransactionGuard(MySQLConnection::Ptr conn) : conn_(conn) {
+        if (conn_ && conn_->valid()) began_ = conn_->beginTransaction();
+    }
+    ~TransactionGuard() {
+        if (began_ && !committed_) conn_->rollback();  // 自动回滚
+    }
+    bool commit() {
+        committed_ = conn_->commit();
+        return committed_;
+    }
+};
+```
+
+### 语义
+
+- 构造：自动 BEGIN
+- 析构：若未 commit() 自动 ROLLBACK
+- 异常安全：抛异常时会自动回滚（与栈展开兼容）
