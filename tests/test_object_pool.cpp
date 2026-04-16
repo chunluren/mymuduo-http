@@ -90,12 +90,36 @@ void testCustomReset() {
     cout << "Custom reset test passed!" << endl;
 }
 
+// 验证：Pool 先析构、Ptr 后析构时不会 UAF
+void testPoolDestroyedBeforePtr() {
+    cout << "=== Testing Pool-destroyed-before-Ptr (UAF prevention) ===" << endl;
+
+    ObjectPool<TestObject>::Ptr escapedPtr;
+
+    {
+        ObjectPool<TestObject> pool(2);
+        escapedPtr = pool.acquire();
+        assert(escapedPtr != nullptr);
+        escapedPtr->value = 42;
+        // pool 离开作用域析构，但 escapedPtr 仍持有对象
+    }
+
+    // 此时 pool 已销毁，escapedPtr 的 Deleter 持 weak_ptr
+    // 析构 escapedPtr 应该走 delete 分支而非 UAF
+    assert(escapedPtr->value == 42);
+    escapedPtr.reset();  // 触发 Deleter，weak_ptr.lock() 应返回 null → 直接 delete
+
+    // 若有 UAF，ASan/Valgrind 会报错；没报错即通过
+    cout << "Pool-destroyed-before-Ptr test passed!" << endl;
+}
+
 int main() {
     cout << "Starting ObjectPool Tests..." << endl << endl;
     testBasicAcquireRelease();
     testPoolExhaustion();
     testThreadSafety();
     testCustomReset();
+    testPoolDestroyedBeforePtr();
     cout << endl << "All ObjectPool tests passed!" << endl;
     return 0;
 }
