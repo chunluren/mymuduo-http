@@ -626,11 +626,46 @@ namespace CurrentThread {
 
 ## 二、HTTP 模块 (http/)
 
+### HttpCore (`src/http/HttpCore.h`)
+
+HTTP 协议处理核心，被 HttpServer 和 HttpsServer 共享（组合模式）。
+
+**职责**：
+- 路由注册 + 匹配（精确哈希 O(1) + 正则回退）
+- 请求解析（从 Buffer / std::string）
+- 中间件链执行
+- Gzip 请求解压 + 响应压缩
+- 静态文件服务（含路径穿越防护）
+- CORS / RateLimit / Metrics 便捷注册
+
+**不负责**：TCP 传输（由 HttpServer 的 TcpServer 或 HttpsServer 的 SSL BIO 处理）
+
+**API**：
+```cpp
+HttpCore core;
+core.GET("/api/user", handler);
+core.enableCors();
+core.enableGzip(1024);
+
+// 在传输层的 onMessage 中
+HttpRequest req;
+if (core.parseRequest(buf, req) == HttpCore::ParseResult::Complete) {
+    HttpResponse resp;
+    core.handleRequest(req, resp);
+    core.postProcessResponse(req, resp);
+    // send resp.toString() via transport
+}
+```
+
+---
+
 ### 2.1 HttpServer — HTTP 服务器
 
 **文件**：`src/http/HttpServer.h`
 
 **职责**：基于 TcpServer 构建的 HTTP/1.1 服务器，支持路由、中间件、静态文件服务。
+
+**实现**：内部持有 HttpCore，通过 TcpServer 接收 TCP 数据，解析后委托 HttpCore 处理。
 
 **类型定义**：
 ```cpp
@@ -2247,6 +2282,8 @@ auto result = breaker.execute([&]() {
 **文件**：`src/http/SslContext.h`、`src/http/HttpsServer.h`
 
 **职责**：基于 OpenSSL Memory BIO 的 TLS 集成，与 Reactor 非阻塞模型无缝配合。
+
+**实现**：内部持有 HttpCore + Memory BIO，SSL 解密后将明文委托 HttpCore 处理。
 
 **SslContext API**：
 ```cpp

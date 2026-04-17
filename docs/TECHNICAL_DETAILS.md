@@ -1472,3 +1472,83 @@ public:
 - 构造：自动 BEGIN
 - 析构：若未 commit() 自动 ROLLBACK
 - 异常安全：抛异常时会自动回滚（与栈展开兼容）
+
+## 17. HttpCore 抽取 — DRY 重构
+
+### 问题
+
+HttpServer.h (805 行) 和 HttpsServer.h (663 行) 有 ~500 行重复代码：
+- HTTP 请求解析（parseRequest/parseHeader）
+- 路由匹配（O(1) 哈希 + 正则）
+- 中间件链
+- Gzip 压缩/解压
+- 静态文件（含安全校验）
+- URL decode
+- isExactPath / methodToString
+
+每次改路由逻辑要改两处，易引入不一致 bug。
+
+### 解决方案
+
+抽取 `HttpCore` 类，包含所有 HTTP 协议处理逻辑。HttpServer 和 HttpsServer
+**通过组合**持有 `HttpCore core_`，只关心各自的传输层：
+- HttpServer: TcpServer → onMessage → core_.parseRequest → core_.handleRequest
+- HttpsServer: SSL decrypt → core_.parseRequest → core_.handleRequest → SSL encrypt
+
+### 收益
+
+| 文件 | 重构前 | 重构后 |
+|------|--------|--------|
+| HttpServer.h | 805 | 217 |
+| HttpsServer.h | 663 | 396 |
+| HttpCore.h (新) | - | 530 |
+| **合计** | **1468** | **1143** |
+
+净减 323 行。路由/中间件逻辑只有一份实现。
+
+### 为什么用组合而不是继承
+
+HttpServer 和 HttpsServer 的传输层差异太大：
+- HttpServer 直接用 TcpServer 的 message callback
+- HttpsServer 用 Memory BIO 做 TLS 握手 + 数据加解密
+
+强制继承会产生复杂的模板方法模式。组合更清晰：
+- HttpCore 只管 HTTP 协议
+- HttpServer/HttpsServer 各自管传输
+- 二者通过值传递 HttpRequest/HttpResponse 交互
+
+### 额外改进
+
+HttpCore::parseRequest 现在在解析阶段就检查 `contentLength > kMaxBodySize`，
+原 HttpServer 是读完整个 body 再检查，容易 OOM。新版在 header 解析后立即拒绝大请求。
+
+## 18. 核心网络类单元测试
+
+为 TcpConnection、Channel、Connector 补齐单测。
+
+### test_channel.cpp
+
+使用 `eventfd(2)` 作为可控 fd：
+```cpp
+int efd = eventfd(0, EFD_NONBLOCK);
+Channel ch(&loop, efd);
+ch.setReadCallback([&](Timestamp) { triggered = true; });
+ch.enableReading();
+// 写 efd 触发回调
+uint64_t v = 1;
+write(efd, &v, sizeof(v));
+loop.loop();  // 回调被执行
+```
+
+### test_tcp_connection.cpp
+
+用 TcpServer + TcpClient 在同一 EventLoop 里 round-trip：
+- basic_echo: 客户端 send → 服务端 echo → 客户端 receive
+- connection_lifecycle: 验证 connect/disconnect callback 调用次数
+- server_shutdown: 服务端 shutdown 时客户端能感知
+
+### test_connector.cpp
+
+- connect_success: 正常连接
+- connection_refused_no_retry: 无服务时不进入重连循环
+- stop_before_connect: 调用 stop 后不应触发 callback

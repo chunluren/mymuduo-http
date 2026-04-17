@@ -433,6 +433,20 @@ static constexpr size_t kMaxBodySize = 10 * 1024 * 1024;
 static constexpr size_t kMaxRequestLine = 8192;
 ```
 
+### HttpCore 分层
+
+```
+HttpServer         HttpsServer
+     ↓                  ↓
+  TcpServer        SSL + BIO
+     ↓                  ↓
+     └──── HttpCore ────┘
+               ↓
+        Router + Middleware + Gzip + Static Files
+```
+
+HttpServer 和 HttpsServer 只负责传输层，HTTP 协议处理统一委托给 HttpCore。
+
 ---
 
 ## 六、RPC 模块设计

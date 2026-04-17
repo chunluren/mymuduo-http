@@ -130,6 +130,11 @@ cd build && ./test_buffer   # 单个测试
 
 ## 完成记录
 
+### 2026-04-17: HttpCore 重构 + 核心类单测
+- 抽取 HttpCore 消除 HttpServer/HttpsServer 500 行重复
+- HttpServer.h: 805 → 217，HttpsServer.h: 663 → 396
+- 新增 test_channel/test_tcp_connection/test_connector 单测
+
 所有 4 个阶段 + 额外改进已全部完成:
 - 阶段 1: WebSocketServer 修复、MySQLPool、RedisPool、心跳/超时、限流器
 - 阶段 2: Gzip 压缩、Chunked Transfer、ObjectPool、CircuitBreaker
