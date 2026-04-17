@@ -37,6 +37,8 @@
 
 #include <string>
 #include <queue>
+#include <vector>
+#include <cstring>
 #include <mutex>
 #include <condition_variable>
 #include <memory>
@@ -206,6 +208,117 @@ public:
 private:
     MYSQL* mysql_;          ///< MySQL 句柄
     int64_t lastUsed_;      ///< 最后使用时间 (秒)
+};
+
+/**
+ * @class PreparedStatement
+ * @brief MySQL 预编译语句 RAII 包装
+ *
+ * 通过参数绑定避免 SQL 注入，比 escape + 拼接更安全且性能更好（语句缓存）。
+ *
+ * 使用示例：
+ *   auto conn = pool.acquire();
+ *   PreparedStatement stmt(conn, "SELECT id, password FROM users WHERE username=?");
+ *   stmt.bindString(1, username);
+ *   if (stmt.execute()) {
+ *       while (stmt.fetch()) {
+ *           int64_t id = stmt.getInt64(0);
+ *           std::string pwd = stmt.getString(1);
+ *       }
+ *   }
+ */
+class PreparedStatement {
+public:
+    PreparedStatement(MySQLConnection::Ptr conn, const std::string& sql)
+        : conn_(conn), stmt_(nullptr), sql_(sql), bound_(false)
+    {
+        if (!conn_ || !conn_->valid()) return;
+        stmt_ = mysql_stmt_init(conn_->raw());
+        if (!stmt_) return;
+        if (mysql_stmt_prepare(stmt_, sql.c_str(), sql.size()) != 0) {
+            mysql_stmt_close(stmt_);
+            stmt_ = nullptr;
+            return;
+        }
+        unsigned long paramCount = mysql_stmt_param_count(stmt_);
+        binds_.resize(paramCount);
+        if (paramCount > 0) {
+            memset(binds_.data(), 0, sizeof(MYSQL_BIND) * paramCount);
+        }
+        // 为每个参数预留缓冲
+        intParams_.resize(paramCount);
+        stringParams_.resize(paramCount);
+        lengthParams_.resize(paramCount);
+    }
+
+    ~PreparedStatement() {
+        if (stmt_) mysql_stmt_close(stmt_);
+    }
+
+    PreparedStatement(const PreparedStatement&) = delete;
+    PreparedStatement& operator=(const PreparedStatement&) = delete;
+
+    bool valid() const { return stmt_ != nullptr; }
+
+    /// 绑定 int64 参数（1-based 索引）
+    void bindInt64(unsigned int idx, int64_t value) {
+        if (idx < 1 || idx > binds_.size()) return;
+        intParams_[idx - 1] = value;
+        binds_[idx - 1].buffer_type = MYSQL_TYPE_LONGLONG;
+        binds_[idx - 1].buffer = &intParams_[idx - 1];
+        binds_[idx - 1].is_null = nullptr;
+        binds_[idx - 1].length = nullptr;
+    }
+
+    /// 绑定字符串参数
+    void bindString(unsigned int idx, const std::string& value) {
+        if (idx < 1 || idx > binds_.size()) return;
+        stringParams_[idx - 1] = value;
+        lengthParams_[idx - 1] = value.size();
+        binds_[idx - 1].buffer_type = MYSQL_TYPE_STRING;
+        binds_[idx - 1].buffer = const_cast<char*>(stringParams_[idx - 1].c_str());
+        binds_[idx - 1].buffer_length = value.size();
+        binds_[idx - 1].length = &lengthParams_[idx - 1];
+        binds_[idx - 1].is_null = nullptr;
+    }
+
+    /// 执行（INSERT/UPDATE/DELETE 用此）
+    bool execute() {
+        if (!stmt_) return false;
+        if (!binds_.empty() && !bound_) {
+            if (mysql_stmt_bind_param(stmt_, binds_.data()) != 0) return false;
+            bound_ = true;
+        }
+        return mysql_stmt_execute(stmt_) == 0;
+    }
+
+    /// 获取受影响的行数
+    int64_t affectedRows() const {
+        if (!stmt_) return -1;
+        return static_cast<int64_t>(mysql_stmt_affected_rows(stmt_));
+    }
+
+    /// 获取最后插入的自增 ID
+    int64_t lastInsertId() const {
+        if (!stmt_) return 0;
+        return static_cast<int64_t>(mysql_stmt_insert_id(stmt_));
+    }
+
+    /// 错误消息
+    std::string lastError() const {
+        if (!stmt_) return "no statement";
+        return mysql_stmt_error(stmt_);
+    }
+
+private:
+    MySQLConnection::Ptr conn_;
+    MYSQL_STMT* stmt_;
+    std::string sql_;
+    bool bound_;
+    std::vector<MYSQL_BIND> binds_;
+    std::vector<int64_t> intParams_;
+    std::vector<std::string> stringParams_;
+    std::vector<unsigned long> lengthParams_;
 };
 
 /**
