@@ -310,8 +310,12 @@ public:
             }
         }
         if (bestPrefix) {
-            serveFile(request, response, *bestDir,
-                      request.path.substr(bestPrefix->size()));
+            // 剥掉前缀后再去掉前导 '/'（serveFile 不接受以 '/' 开头的子路径）
+            std::string sub = request.path.substr(bestPrefix->size());
+            while (!sub.empty() && sub.front() == '/') sub.erase(0, 1);
+            // 子路径为空时（如访问目录根），默认尝试 index.html
+            if (sub.empty()) sub = "index.html";
+            serveFile(request, response, *bestDir, sub);
             return;
         }
 
