@@ -297,15 +297,22 @@ public:
             }
         }
 
-        // 静态文件
+        // 静态文件 — 用最长前缀匹配（避免 "/" 拦截 "/uploads" 等更具体的路径）
+        const std::string* bestPrefix = nullptr;
+        const std::string* bestDir = nullptr;
         for (const auto& kv : staticDirs_) {
             const std::string& prefix = kv.first;
-            const std::string& dir = kv.second;
             if (request.path.find(prefix) == 0) {
-                serveFile(request, response, dir,
-                          request.path.substr(prefix.size()));
-                return;
+                if (!bestPrefix || prefix.size() > bestPrefix->size()) {
+                    bestPrefix = &kv.first;
+                    bestDir = &kv.second;
+                }
             }
+        }
+        if (bestPrefix) {
+            serveFile(request, response, *bestDir,
+                      request.path.substr(bestPrefix->size()));
+            return;
         }
 
         // 404
