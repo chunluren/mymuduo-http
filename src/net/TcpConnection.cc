@@ -263,6 +263,16 @@ void TcpConnection::shutdownInLoop()
     }
 }
 
+void TcpConnection::setTcpNoDelay(bool on)
+{
+    socket_->setTcpNoDelay(on);
+}
+
+void TcpConnection::setKeepAlive(bool on)
+{
+    socket_->setKeepAlive(on);
+}
+
 // 发送数据 应用写的快而内核发送数据慢，需要把待发送数据写入缓冲区，设置水位回调
 void TcpConnection::sendInLoop(const void *data, size_t len)
 { 

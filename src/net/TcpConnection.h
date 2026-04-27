@@ -134,6 +134,19 @@ public:
     void shutdown();
 
     /**
+     * @brief 关闭 Nagle 算法（降低小包响应延迟）
+     *
+     * 默认推荐 true：HTTP 响应/WS 小帧/IM ack 都是短消息，Nagle 会与对端的
+     * 延迟 ACK 合谋出现 40ms 等待。开了 NODELAY 内核会立刻发包。
+     */
+    void setTcpNoDelay(bool on);
+
+    /**
+     * @brief 启用 SO_KEEPALIVE
+     */
+    void setKeepAlive(bool on);
+
+    /**
      * @brief 在 EventLoop 线程中执行 shutdown
      *
      * shutdown() 的内部实现
