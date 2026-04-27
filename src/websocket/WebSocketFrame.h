@@ -134,8 +134,72 @@ public:
      * @param mask 是否掩码 (服务器发送不需要)
      * @return 编码后的字节数组
      */
-    static std::vector<uint8_t> encode(const WebSocketFrame& frame, bool mask = false) {
+    /**
+     * @brief 直接用裸指针编码，跳过 frame.payload 中转
+     *
+     * encodeText/Binary/Close 走这条路，避免先把 string/data 复制进
+     * frame.payload，再 encode 时再复制一次（双重 memcpy）。
+     */
+    static std::vector<uint8_t> encodeRaw(WsOpcode opcode, const uint8_t* payload,
+                                          size_t payloadLen, bool fin = true,
+                                          bool mask = false) {
         std::vector<uint8_t> data;
+        data.reserve(2 + 8 + 4 + payloadLen);
+
+        uint8_t byte1 = (fin ? 0x80 : 0x00) |
+                        (static_cast<uint8_t>(opcode) & 0x0F);
+        data.push_back(byte1);
+
+        uint8_t byte2 = (mask ? 0x80 : 0x00);
+        if (payloadLen <= 125) {
+            byte2 |= static_cast<uint8_t>(payloadLen);
+            data.push_back(byte2);
+        } else if (payloadLen <= 65535) {
+            byte2 |= 126;
+            data.push_back(byte2);
+            data.push_back(static_cast<uint8_t>((payloadLen >> 8) & 0xFF));
+            data.push_back(static_cast<uint8_t>(payloadLen & 0xFF));
+        } else {
+            byte2 |= 127;
+            data.push_back(byte2);
+            for (int i = 7; i >= 0; --i) {
+                data.push_back(static_cast<uint8_t>((payloadLen >> (i * 8)) & 0xFF));
+            }
+        }
+
+        uint8_t maskingKey[4] = {0};
+        if (mask) {
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<uint32_t> dist(0, 255);
+            for (int i = 0; i < 4; ++i) {
+                maskingKey[i] = static_cast<uint8_t>(dist(gen));
+                data.push_back(maskingKey[i]);
+            }
+        }
+
+        if (payloadLen > 0 && payload) {
+            if (!mask) {
+                data.insert(data.end(), payload, payload + payloadLen);
+            } else {
+                size_t base = data.size();
+                data.resize(base + payloadLen);
+                uint8_t* dst = data.data() + base;
+                for (size_t i = 0; i < payloadLen; ++i) {
+                    dst[i] = payload[i] ^ maskingKey[i & 3];
+                }
+            }
+        }
+        return data;
+    }
+
+    static std::vector<uint8_t> encode(const WebSocketFrame& frame, bool mask = false) {
+        const size_t payloadLen = frame.payload.size();
+
+        // 头部最大 14 字节：1（fin+opcode）+ 1（mask+len）+ 8（64-bit len）+ 4（mask key）
+        // 一次 reserve 把整个帧空间分好，避免增长时反复拷贝
+        std::vector<uint8_t> data;
+        data.reserve(2 + 8 + 4 + payloadLen);
 
         // 第一个字节: FIN(1) + RSV(3) + Opcode(4)
         uint8_t byte1 = (frame.fin ? 0x80 : 0x00) |
@@ -146,7 +210,6 @@ public:
         data.push_back(byte1);
 
         // 第二个字节: MASK(1) + Payload length(7)
-        size_t payloadLen = frame.payload.size();
         uint8_t byte2 = (mask ? 0x80 : 0x00);
 
         if (payloadLen <= 125) {
@@ -181,35 +244,37 @@ public:
             }
         }
 
-        // 负载数据
-        const uint8_t* payloadData = frame.payload.data();
-        for (size_t i = 0; i < payloadLen; ++i) {
-            if (mask) {
-                data.push_back(payloadData[i] ^ maskingKey[i % 4]);
+        // 负载数据：批量复制（不带掩码）或循环异或（带掩码）
+        // 之前的实现是每字节 push_back，O(N) 但常数极大；现在 reserve 完后 insert
+        // 是单次 memcpy。
+        if (payloadLen > 0) {
+            const uint8_t* payloadData = frame.payload.data();
+            if (!mask) {
+                data.insert(data.end(), payloadData, payloadData + payloadLen);
             } else {
-                data.push_back(payloadData[i]);
+                size_t base = data.size();
+                data.resize(base + payloadLen);
+                uint8_t* dst = data.data() + base;
+                // mask 是固定 4 字节循环，对小负载循环异或开销可接受
+                for (size_t i = 0; i < payloadLen; ++i) {
+                    dst[i] = payloadData[i] ^ maskingKey[i & 3];
+                }
             }
         }
 
         return data;
     }
 
-    /// 快速编码文本帧
+    /// 快速编码文本帧（避开 payload 中转拷贝）
     static std::vector<uint8_t> encodeText(const std::string& text) {
-        WebSocketFrame frame;
-        frame.fin = true;
-        frame.opcode = WsOpcode::Text;
-        frame.payload.assign(text.begin(), text.end());
-        return encode(frame);
+        return encodeRaw(WsOpcode::Text,
+                         reinterpret_cast<const uint8_t*>(text.data()),
+                         text.size());
     }
 
-    /// 快速编码二进制帧
+    /// 快速编码二进制帧（避开 payload 中转拷贝）
     static std::vector<uint8_t> encodeBinary(const std::vector<uint8_t>& data) {
-        WebSocketFrame frame;
-        frame.fin = true;
-        frame.opcode = WsOpcode::Binary;
-        frame.payload = data;
-        return encode(frame);
+        return encodeRaw(WsOpcode::Binary, data.data(), data.size());
     }
 
     /// 快速编码关闭帧
