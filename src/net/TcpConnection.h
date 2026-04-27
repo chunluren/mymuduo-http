@@ -31,8 +31,10 @@
 
 #include <memory>
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <string>
+#include <sys/types.h>  // off_t
 
 class Channel;
 class EventLoop;
@@ -140,6 +142,24 @@ public:
      */
     struct IoSlice { const void* data; size_t len; };
     void sendIov(const IoSlice* slices, int count);
+
+    /**
+     * @brief 通过 sendfile(2) 把文件 fd 的内容零拷贝送到 socket
+     *
+     * 用途：静态文件、大附件下载。比 read+write 少一次用户态拷贝。
+     *
+     * 行为：
+     *   - 入队到 pendingFiles_，handleWrite() 在 outputBuffer 排空后接着 drain
+     *   - 同线程立即尝试一次 sendfile；写不完的部分留队等下次 EPOLLOUT
+     *   - 调用方将 fd 所有权交给 TcpConnection；transfer 完成或 conn 析构时 close
+     *   - 跨线程调用：runInLoop 转发
+     *
+     * @param fd       打开的可读文件 fd（O_RDONLY/O_NONBLOCK 都可，但 sendfile
+     *                 对 regular file 是阻塞读，所以 fd 阻塞标志无所谓）
+     * @param offset   文件内起始偏移
+     * @param count    要发送的字节数
+     */
+    void sendFile(int fd, off_t offset, size_t count);
 
     /**
      * @brief 关闭写端 (半关闭)
@@ -311,4 +331,18 @@ private:
 
     Buffer inputBuffer_;   ///< 输入缓冲区
     Buffer outputBuffer_;  ///< 输出缓冲区
+
+    /// 待发文件队列（sendFile 用）。所有权 = TcpConnection；transfer 完成或析构 close。
+    struct PendingFile {
+        int fd;
+        off_t offset;
+        size_t remaining;
+    };
+    std::deque<PendingFile> pendingFiles_;
+
+    /// 在 outputBuffer 排空之后从 pendingFiles_ drain；返回是否还需要保持 EPOLLOUT
+    bool drainPendingFiles();
+
+    /// 关闭并清空所有待发文件
+    void closePendingFiles();
 };

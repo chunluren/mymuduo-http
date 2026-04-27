@@ -83,6 +83,11 @@ public:
     bool chunked_ = false;                              ///< 是否 chunked
     std::vector<std::string> chunks_;                   ///< chunk 数据
 
+    /// 文件 fd 模式（sendfile 零拷贝）；-1 = 未启用
+    /// 注意：fd 一旦 setFileBody 就交给响应/连接管理；调用方不要再 close
+    int bodyFileFd_ = -1;
+    size_t bodyFileSize_ = 0;
+
     /**
      * @brief 默认构造函数
      *
@@ -161,6 +166,24 @@ public:
         body = b;
         setContentLength(body.size());
     }
+
+    /**
+     * @brief 用文件 fd 作为响应体（零拷贝路径，sendfile）
+     *
+     * 调用方将 fd 所有权交出去；HttpServer 在响应序列化后会通过
+     * TcpConnection::sendFile 把 fd 推到 socket，TcpConnection 负责 close。
+     * Content-Length 自动设置；不要再调 setBody。
+     */
+    void setFileBody(int fd, size_t size) {
+        bodyFileFd_ = fd;
+        bodyFileSize_ = size;
+        body.clear();
+        setContentLength(size);
+    }
+
+    int  bodyFileFd()   const { return bodyFileFd_; }
+    size_t bodyFileSize() const { return bodyFileSize_; }
+    bool hasFileBody()  const { return bodyFileFd_ >= 0; }
 
     /**
      * @brief 设置 JSON 响应

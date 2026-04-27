@@ -30,6 +30,9 @@
 #include <unordered_map>
 #include <vector>
 #include <regex>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <shared_mutex>
 #include <mutex>
 #include <memory>
@@ -480,26 +483,22 @@ private:
             return;
         }
 
-        FILE* fp = fopen(filepath.c_str(), "rb");
-        if (!fp) {
+        // sendfile 零拷贝路径：open + fstat 拿大小，把 fd 交给 response
+        // HttpServer 完成 header 发送后调 conn->sendFile(fd, 0, size)
+        int fd = ::open(filepath.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
             response = HttpResponse::notFound();
             return;
         }
-        std::unique_ptr<FILE, decltype(&fclose)> fileGuard(fp, &fclose);
-
-        fseek(fp, 0, SEEK_END);
-        long size = ftell(fp);
-        fseek(fp, 0, SEEK_SET);
-
-        if (size <= 0 || size > static_cast<long>(kMaxBodySize)) {
-            response = HttpResponse::serverError("File too large");
+        struct stat st;
+        if (::fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+            ::close(fd);
+            response = HttpResponse::notFound();
             return;
         }
-
-        std::string content(size, '\0');
-        size_t readSize = fread(&content[0], 1, size, fp);
-        if (readSize != static_cast<size_t>(size)) {
-            response = HttpResponse::serverError("File read error");
+        if (st.st_size <= 0 || static_cast<size_t>(st.st_size) > kMaxBodySize) {
+            ::close(fd);
+            response = HttpResponse::serverError("File too large");
             return;
         }
 
@@ -521,7 +520,7 @@ private:
             response.setContentType("application/octet-stream");
         }
 
-        response.setBody(content);
+        response.setFileBody(fd, static_cast<size_t>(st.st_size));
     }
 
     // ==================== 成员变量 ====================

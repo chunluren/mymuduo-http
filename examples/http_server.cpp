@@ -77,6 +77,8 @@ int main() {
     
     // 静态文件
     server.serveStatic("/static", "./static");
+    // 用于 sendfile zero-copy 测试
+    server.serveStatic("/tmp", "/tmp/static-test");
     
     std::cout << "HTTP Server running on http://localhost:8080" << std::endl;
     
