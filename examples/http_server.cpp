@@ -65,6 +65,15 @@ int main() {
         // Echo back the posted JSON
         resp.setJson(req.body);
     });
+
+    // GET /api/large — 64KB body, used to measure the writev (header+body) split
+    {
+        std::string bigBody(64 * 1024, 'x');
+        server.GET("/api/large", [bigBody](const HttpRequest& /*req*/, HttpResponse& resp) {
+            resp.setBody(bigBody);
+            resp.setHeader("Content-Type", "text/plain");
+        });
+    }
     
     // 静态文件
     server.serveStatic("/static", "./static");

@@ -78,6 +78,10 @@ LUA
 WRK_PIPE=$(wrk -t1 -c1 -d10s --latency -s "$PIPE_LUA" "$URL" 2>&1)
 rm -f "$PIPE_LUA"
 
+# 5) wrk large body keep-alive: 64KB body — sensitive to header/body memcpy in toString()
+LARGE_URL="http://127.0.0.1:$PORT/api/large"
+WRK_LARGE=$(wrk -t4 -c100 -d20s --latency "$LARGE_URL" 2>&1)
+
 # 5) Resource snapshot of the server after the runs
 RSS_KB=$(awk '/^VmRSS/ {print $2}' /proc/$SERVER_PID/status 2>/dev/null || echo "?")
 THREADS=$(awk '/^Threads/ {print $2}' /proc/$SERVER_PID/status 2>/dev/null || echo "?")
@@ -101,6 +105,7 @@ THREADS=$(awk '/^Threads/ {print $2}' /proc/$SERVER_PID/status 2>/dev/null || ec
   echo "| 2 | wrk  | -t1 -c1 -d10s   | Single-conn latency (Nagle visible here) |"
   echo "| 3 | wrk  | -t4 -c100 -d20s -H 'Connection: close' | Short-conn accept+close path |"
   echo "| 4 | wrk  | -t1 -c1 -d10s   | Single-conn (same as #2) for serial baseline |"
+  echo "| 5 | wrk  | -t4 -c100 -d20s /api/large | 64 KB body — writev header/body split |"
   echo
   echo "---"
   echo
@@ -126,6 +131,12 @@ THREADS=$(awk '/^Threads/ {print $2}' /proc/$SERVER_PID/status 2>/dev/null || ec
   echo
   echo '```'
   echo "$WRK_PIPE"
+  echo '```'
+  echo
+  echo "## 5) wrk 64KB body keep-alive (4×100, 20s, /api/large)"
+  echo
+  echo '```'
+  echo "$WRK_LARGE"
   echo '```'
   echo
   echo "## Notes"

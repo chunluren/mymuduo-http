@@ -283,6 +283,37 @@ public:
         return result;
     }
 
+    /**
+     * @brief 仅返回状态行 + 头部 + 空行（不含 body）
+     *
+     * 给 sendIov 用：header 走第一段，body 走第二段，writev 一次出去，不再
+     * 把 body memcpy 进 header string。chunked 模式下 chunks_ 已经在 body
+     * 里被串过，不适合走这条路 → 这种情况调用方应回退到 toString()。
+     */
+    std::string toHeader() const {
+        std::string h;
+        h.reserve(256);
+        h += "HTTP/1.1 ";
+        h += std::to_string(static_cast<int>(statusCode));
+        h += ' ';
+        h += statusMessage;
+        h += "\r\n";
+        for (const auto& [key, value] : headers) {
+            if (chunked_ && key == "Content-Length") continue;
+            h += key; h += ": "; h += value; h += "\r\n";
+        }
+        if (chunked_) h += "Transfer-Encoding: chunked\r\n";
+        h += "Connection: ";
+        h += (closeConnection ? "close" : "keep-alive");
+        h += "\r\n";
+        h += "Server: mymuduo-http/1.0\r\n";
+        h += "\r\n";
+        return h;
+    }
+
+    /// chunked 模式不能走 sendIov 拆分（chunks_ 形式无法用单段 body 表达）
+    bool canSendIov() const { return !chunked_; }
+
     // ==================== 静态工厂方法 ====================
 
     /**

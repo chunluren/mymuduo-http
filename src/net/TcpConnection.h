@@ -125,6 +125,23 @@ public:
     void send(std::string&& message);
 
     /**
+     * @brief 多缓冲区一次性发送（writev）
+     *
+     * 用途：HTTP 响应的 header + body、WS 帧 header + payload 等"逻辑上分开
+     * 但物理上要紧挨着发"的场景。避免调用方先把 body memcpy 进 header string。
+     *
+     * 行为：
+     *   - 在所属 EventLoop 里调用：尝试一次 writev；写不完的尾巴 append 到 outputBuffer_
+     *     等下次 EPOLLOUT 时继续
+     *   - 跨线程调用：会把 iov 拼成一个 std::string 转发到 IO 线程（退化路径，但保正确）
+     *
+     * 注意：该接口在调用返回后**可以**让 iov_base 失效（拼到 outputBuffer 里了或者
+     * 已经写出去了），调用方按值传 string/vector 即可不必担心生命周期。
+     */
+    struct IoSlice { const void* data; size_t len; };
+    void sendIov(const IoSlice* slices, int count);
+
+    /**
      * @brief 关闭写端 (半关闭)
      *
      * 调用 shutdown() 后，连接变成半关闭状态:
