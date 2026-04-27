@@ -34,7 +34,12 @@ TcpConnection::TcpConnection(EventLoop *loop,
       channel_(std::make_unique<Channel>(loop, sockfd)),
       localAddr_(localAddr),
       peerAddr_(peerAddr),
-      highWaterMark_(64*1024*1024)
+      highWaterMark_(64*1024*1024),
+      // 4KB 初始大小：HTTP 请求头 + 中等 JSON 响应（典型 1-3KB）一次性容下，
+      // 避免首请求触发 vector::resize。代价：每连接多 6KB 常驻（默认 1KB 与 4KB 的差，
+      // 两个 Buffer），万连接量级 ~60MB，单机可接受。
+      inputBuffer_(4096),
+      outputBuffer_(4096)
 {
     // 绑定回调函数,给channel设置相应的回调函数
     channel_->setReadCallback(
