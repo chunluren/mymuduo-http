@@ -8,6 +8,7 @@
 #include <sys/types.h>          /* See NOTES */
 #include <sys/socket.h>
 #include <sys/uio.h>             /* writev */
+#include <sys/sendfile.h>        /* sendfile(2) */
 #include <strings.h>
 #include <netinet/tcp.h>
 
@@ -54,6 +55,7 @@ TcpConnection::TcpConnection(EventLoop *loop,
 
 TcpConnection::~TcpConnection()
 {
+    closePendingFiles();
     LOG_DEBUG("TcpConnection::dtor[%s] at fd=%d state=%d\n", name_.c_str(), channel_->fd(), (int)state_);
 }
 
@@ -101,37 +103,112 @@ void TcpConnection::connectDestroyed()
 
 void TcpConnection::handleWrite()
 {
-    if(channel_->isWriting())
+    if(!channel_->isWriting())
+    {
+        LOG_ERROR("TcpConnection fd=%d is down, no more writing\n", channel_->fd());
+        return;
+    }
+
+    // 1) 先排空 outputBuffer
+    if (outputBuffer_.readableBytes() > 0)
     {
         int savedErrno = 0;
         ssize_t n = outputBuffer_.writeFd(channel_->fd(), &savedErrno);
-        if(n > 0)
-        {
+        if (n > 0) {
             outputBuffer_.retrieve(n);
-            if(outputBuffer_.readableBytes() == 0)
-            {
-                channel_->disableWriting();
-                if(writeCompleteCallback_)
-                {
-                    // 唤醒loop_对应的线程,执行回调
-                    loop_->queueInLoop(
-                        std::bind(writeCompleteCallback_, shared_from_this())
-                    );
-                }
-                if(state_ == kDisconnecting)
-                {
-                    shutdownInLoop();
-                }
-            }
+        } else {
+            LOG_ERROR("TcpConnection::handleWrite outputBuffer");
+            return;
         }
-        else
-        {
-            LOG_ERROR("TcpConnection::handleWrite");
+        if (outputBuffer_.readableBytes() > 0) {
+            // 还没排空，下一次 EPOLLOUT 接着来
+            return;
         }
     }
-    else
-    {
-        LOG_ERROR("TcpConnection fd=%d is down, no more writing\n", channel_->fd());
+
+    // 2) outputBuffer 排空了，看看还有没有待发文件
+    bool stillNeedWrite = drainPendingFiles();
+    if (stillNeedWrite) return;
+
+    // 3) 都干净了
+    channel_->disableWriting();
+    if (writeCompleteCallback_) {
+        loop_->queueInLoop(std::bind(writeCompleteCallback_, shared_from_this()));
+    }
+    if (state_ == kDisconnecting) {
+        shutdownInLoop();
+    }
+}
+
+bool TcpConnection::drainPendingFiles()
+{
+    while (!pendingFiles_.empty()) {
+        auto& pf = pendingFiles_.front();
+        // sendfile 最多一次性发 ~2GB；分批 64MB 防一次 syscall 阻塞太久
+        constexpr size_t kBatch = 64 * 1024 * 1024;
+        size_t toSend = pf.remaining < kBatch ? pf.remaining : kBatch;
+        ssize_t n = ::sendfile(channel_->fd(), pf.fd, &pf.offset, toSend);
+        if (n > 0) {
+            pf.remaining -= static_cast<size_t>(n);
+            if (pf.remaining == 0) {
+                ::close(pf.fd);
+                pendingFiles_.pop_front();
+                continue;  // 看下一个
+            }
+            // 发了一些但没发完 → 内核 socket 缓冲满，回去等 EPOLLOUT
+            return true;
+        }
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return true;  // 正常，等下次写就绪
+            }
+            LOG_ERROR("TcpConnection::sendfile errno=%d", errno);
+            // 发不下去了，把这条文件丢掉，避免死循环
+            ::close(pf.fd);
+            pendingFiles_.pop_front();
+            return !pendingFiles_.empty();
+        }
+        // n == 0 视同发不动（不应该发生在正常文件上）
+        ::close(pf.fd);
+        pendingFiles_.pop_front();
+    }
+    return false;
+}
+
+void TcpConnection::closePendingFiles()
+{
+    for (auto& pf : pendingFiles_) ::close(pf.fd);
+    pendingFiles_.clear();
+}
+
+void TcpConnection::sendFile(int fd, off_t offset, size_t count)
+{
+    if (state_ != kConnected || count == 0) {
+        if (fd >= 0) ::close(fd);
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        loop_->runInLoop(
+            [self = shared_from_this(), fd, offset, count]() {
+                self->sendFile(fd, offset, count);
+            });
+        return;
+    }
+    pendingFiles_.push_back({fd, offset, count});
+    // outputBuffer 还有数据 / 已经在 writing 状态 → handleWrite 会接管
+    if (channel_->isWriting() || outputBuffer_.readableBytes() > 0) {
+        if (!channel_->isWriting()) channel_->enableWriting();
+        return;
+    }
+    // 立即尝试一次
+    bool stillNeed = drainPendingFiles();
+    if (stillNeed) {
+        if (!channel_->isWriting()) channel_->enableWriting();
+    } else {
+        // 一发完毕
+        if (writeCompleteCallback_) {
+            loop_->queueInLoop(std::bind(writeCompleteCallback_, shared_from_this()));
+        }
     }
 }
 
