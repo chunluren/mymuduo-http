@@ -146,6 +146,9 @@ public:
      */
     void setKeepAlive(bool on);
 
+    /// 调 keepalive 探测参数，见 Socket::setKeepAliveParams
+    void setKeepAliveParams(int idleSec, int intvlSec, int probeCount);
+
     /**
      * @brief 在 EventLoop 线程中执行 shutdown
      *

@@ -25,7 +25,9 @@ public:
     void setTcpNoDelay(bool on);
     void setReuseAddr(bool on);
     void setReusePort(bool on);
-    void setKeepAlive(bool on); 
+    void setKeepAlive(bool on);
+    /// 调收紧 keepalive 探测：默认 60s 空闲后开探，10s 一次，3 次失败断
+    void setKeepAliveParams(int idleSec, int intvlSec, int probeCount);
 private:
     const int sockfd_;
 };
