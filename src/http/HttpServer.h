@@ -205,7 +205,18 @@ private:
             core_.postProcessResponse(request, response);
 
             response.closeConnection = !request.keepAlive();
-            conn->send(response.toString());
+            // 走 writev 路径：header 与 body 分开送，避免把 body memcpy 进 header
+            // string。chunked 响应 body 是分段的，结构跟 IoSlice 不匹配 → 回退 toString。
+            if (response.canSendIov()) {
+                std::string header = response.toHeader();
+                TcpConnection::IoSlice slices[2] = {
+                    { header.data(), header.size() },
+                    { response.body.data(), response.body.size() },
+                };
+                conn->sendIov(slices, 2);
+            } else {
+                conn->send(response.toString());
+            }
 
             if (response.closeConnection) {
                 conn->shutdown();
