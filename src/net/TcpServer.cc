@@ -171,9 +171,11 @@ void TcpServer::newConnection(int sockfd, const InetAddress &peerAddr)
 
     // 默认开启 TCP_NODELAY（关 Nagle）+ SO_KEEPALIVE
     // - HTTP/WS/IM 都是短消息为主，Nagle 与对端 delayed-ACK 合谋会带来 40ms 抖动
-    // - SO_KEEPALIVE 防"半连接"长期存活；具体探测间隔仍走默认 7200s（按需在调用方调）
+    // - SO_KEEPALIVE + 收紧探测参数：60s 空闲后探，10s 一次，3 次失败断
+    //   （内核默认 7200s/75s/9 = 半连接撑两小时，对长连 IM/WS 太松）
     conn->setTcpNoDelay(true);
     conn->setKeepAlive(true);
+    conn->setKeepAliveParams(60, 10, 3);
 
     // 将连接保存到连接映射表中
     connections_[connName] = conn;

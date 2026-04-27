@@ -91,3 +91,14 @@ void Socket::setKeepAlive(bool on)
         LOG_ERROR("setsockopt SO_KEEPALIVE failed, fd=%d", sockfd_);
     }
 }
+
+void Socket::setKeepAliveParams(int idleSec, int intvlSec, int probeCount)
+{
+    // 调收紧探测参数：内核默认 7200/75/9 = 半连接撑两小时，对长连接 IM/WS 太松
+    if (::setsockopt(sockfd_, IPPROTO_TCP, TCP_KEEPIDLE, &idleSec, sizeof(idleSec)) < 0)
+        LOG_ERROR("setsockopt TCP_KEEPIDLE failed, fd=%d", sockfd_);
+    if (::setsockopt(sockfd_, IPPROTO_TCP, TCP_KEEPINTVL, &intvlSec, sizeof(intvlSec)) < 0)
+        LOG_ERROR("setsockopt TCP_KEEPINTVL failed, fd=%d", sockfd_);
+    if (::setsockopt(sockfd_, IPPROTO_TCP, TCP_KEEPCNT, &probeCount, sizeof(probeCount)) < 0)
+        LOG_ERROR("setsockopt TCP_KEEPCNT failed, fd=%d", sockfd_);
+}
