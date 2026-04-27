@@ -115,12 +115,15 @@ public:
     /**
      * @brief 构造函数
      *
-     * 初始化缓冲区:
-     * - 分配 kCheapPrepend + kInitialSize 大小的空间
-     * - 设置 readerIndex_ 和 writerIndex_ 到预留头部之后
+     * @param initialSize 可写区初始尺寸（不含 prepend）；默认 kInitialSize=1024。
+     *
+     * 调用方按场景预设：
+     *   - HTTP 接入连接的 input/output buffer 建议 4KB（典型 header + JSON 一次到位，
+     *     避免首次响应触发 vector::resize 拷贝）
+     *   - 内部协议短消息可保留默认 1KB
      */
-    explicit Buffer()
-        : buffer_(kInitialSize + kCheapPrepend)
+    explicit Buffer(size_t initialSize = kInitialSize)
+        : buffer_(initialSize + kCheapPrepend)
         , readerIndex_(kCheapPrepend)
         , writerIndex_(kCheapPrepend)
     {}
