@@ -169,6 +169,12 @@ void TcpServer::newConnection(int sockfd, const InetAddress &peerAddr)
     // TcpConnection 构造函数会创建 Socket 和 Channel
     auto conn = std::make_shared<TcpConnection>(ioLoop, connName, sockfd, localAddr, peerAddr);
 
+    // 默认开启 TCP_NODELAY（关 Nagle）+ SO_KEEPALIVE
+    // - HTTP/WS/IM 都是短消息为主，Nagle 与对端 delayed-ACK 合谋会带来 40ms 抖动
+    // - SO_KEEPALIVE 防"半连接"长期存活；具体探测间隔仍走默认 7200s（按需在调用方调）
+    conn->setTcpNoDelay(true);
+    conn->setKeepAlive(true);
+
     // 将连接保存到连接映射表中
     connections_[connName] = conn;
 
