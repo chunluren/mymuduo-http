@@ -444,6 +444,11 @@ public:
      * 始终用本池（master）。没注册任何 replica → acquireRead 退化为 acquire，单
      * MySQL 部署透明工作。
      *
+     * **必须在 server 启动前（线程未起来）调用一次或多次。** 不是线程安全的：
+     * vector::push_back 在并发 acquireRead 时可能 resize 让正在读的 idx 失效。
+     * 如果生产需要热加 replica（比如手动加 slave），需要补 mutex 或换成
+     * shared_ptr<vector> + atomic_load。
+     *
      * @param replica 一个独立的 MySQLPool 实例，连接到只读 slave
      */
     void addReadReplica(std::shared_ptr<MySQLPool> replica) {
