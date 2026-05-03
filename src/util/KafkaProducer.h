@@ -49,6 +49,15 @@ public:
         brokerList_ = std::move(brokerList);
     }
 
+    /// Phase 6.3：开启事务模式。必须在 start() 之前调。
+    /// transactionalId 必须全局唯一（同一个进程相同 id 多次启停不破事务一致性）。
+    /// 配置 transactional.id 后，librdkafka 在 start() 里自动 init_transactions。
+    void enableTransactions(std::string transactionalId, int timeoutMs = 10000) {
+        transactionalId_ = std::move(transactionalId);
+        transactionTimeoutMs_ = timeoutMs;
+    }
+    bool transactional() const { return !transactionalId_.empty(); }
+
     ~KafkaProducer() { stop(); }
 
     /// 启动 producer + 后台 poll 线程
@@ -65,7 +74,20 @@ public:
         conf->set("enable.idempotence", "true", err);
         conf->set("max.in.flight.requests.per.connection", "5", err);
         conf->set("retries", "10", err);
-        conf->set("delivery.timeout.ms", "120000", err);
+        // delivery.timeout.ms 必须 ≤ transaction.timeout.ms（librdkafka 校验）
+        // 默认 120s；事务模式下下调到 transactionTimeoutMs_
+        int deliveryTimeoutMs = 120000;
+        if (!transactionalId_.empty()) {
+            deliveryTimeoutMs = transactionTimeoutMs_;
+        }
+        conf->set("delivery.timeout.ms", std::to_string(deliveryTimeoutMs), err);
+
+        // Phase 6.3：事务模式（read-process-write 原子）
+        if (!transactionalId_.empty()) {
+            conf->set("transactional.id", transactionalId_, err);
+            conf->set("transaction.timeout.ms",
+                      std::to_string(transactionTimeoutMs_), err);
+        }
 
         // 吞吐
         conf->set("linger.ms", "10", err);          // 攒 10ms 一批
@@ -83,7 +105,79 @@ public:
             return false;
         }
 
+        // Phase 6.3：事务模式必须先 init_transactions（一次性）
+        if (!transactionalId_.empty()) {
+            auto error = producer_->init_transactions(transactionTimeoutMs_);
+            if (error) {
+                std::cerr << "[kafka] init_transactions fail: "
+                          << error->str() << "\n";
+                producer_.reset();
+                running_ = false;
+                return false;
+            }
+            std::cerr << "[kafka] transactions initialized id="
+                      << transactionalId_ << "\n";
+        }
+
         pollThread_ = std::thread([this]() { pollLoop(); });
+        return true;
+    }
+
+    // ─── Phase 6.3 transactional API ───────────────────────────────
+    // begin/send/commit/abort 跟 librdkafka 1:1 映射，调用方按 read-process-write
+    // 模式自己组织循环。任意一步失败都要 abort 回滚。
+
+    /// 开启一个事务。成功返回 true。
+    bool beginTransaction() {
+        if (!producer_ || transactionalId_.empty()) return false;
+        auto err = producer_->begin_transaction();
+        if (err) {
+            std::cerr << "[kafka] begin_transaction fail: " << err->str() << "\n";
+            return false;
+        }
+        return true;
+    }
+
+    /// 提交事务。成功后 produce 的消息对 read_committed consumer 可见。
+    bool commitTransaction(int timeoutMs = -1) {
+        if (!producer_ || transactionalId_.empty()) return false;
+        if (timeoutMs < 0) timeoutMs = transactionTimeoutMs_;
+        auto err = producer_->commit_transaction(timeoutMs);
+        if (err) {
+            std::cerr << "[kafka] commit_transaction fail: " << err->str() << "\n";
+            return false;
+        }
+        return true;
+    }
+
+    /// 取消当前事务，已 produce 的消息对 read_committed consumer 不可见。
+    bool abortTransaction(int timeoutMs = -1) {
+        if (!producer_ || transactionalId_.empty()) return false;
+        if (timeoutMs < 0) timeoutMs = transactionTimeoutMs_;
+        auto err = producer_->abort_transaction(timeoutMs);
+        if (err) {
+            std::cerr << "[kafka] abort_transaction fail: " << err->str() << "\n";
+            return false;
+        }
+        return true;
+    }
+
+    /// 把 consumer 当前 offsets 写到 producer 事务里 — 这样 commit 时
+    /// "下游 produce" + "上游 consumer offset commit" 是同一个原子动作。
+    /// 这是 Kafka EOS（exactly-once semantics）的核心。
+    bool sendOffsetsToTransaction(
+            const std::vector<RdKafka::TopicPartition*>& offsets,
+            const RdKafka::ConsumerGroupMetadata* groupMeta,
+            int timeoutMs = -1) {
+        if (!producer_ || transactionalId_.empty()) return false;
+        if (timeoutMs < 0) timeoutMs = transactionTimeoutMs_;
+        auto err = producer_->send_offsets_to_transaction(
+            offsets, groupMeta, timeoutMs);
+        if (err) {
+            std::cerr << "[kafka] send_offsets_to_transaction fail: "
+                      << err->str() << "\n";
+            return false;
+        }
         return true;
     }
 
@@ -172,6 +266,8 @@ private:
 
     std::string brokerList_;
     std::string clientId_;
+    std::string transactionalId_;            // 非空 → 启用事务模式
+    int         transactionTimeoutMs_ = 10000;
     std::atomic<bool> running_{false};
     std::unique_ptr<RdKafka::Producer> producer_;
     std::unique_ptr<DeliveryReportCb> deliveryCb_;
