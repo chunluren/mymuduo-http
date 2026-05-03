@@ -141,6 +141,21 @@ else()
     message(STATUS "hiredis not found, RedisPool tests will be skipped")
 endif()
 
+# 查找 librdkafka (可选)
+find_path(KAFKA_INCLUDE_DIR librdkafka/rdkafkacpp.h
+    PATHS /usr/include /usr/local/include)
+find_library(KAFKA_CPP_LIBRARY rdkafka++
+    PATHS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
+find_library(KAFKA_C_LIBRARY rdkafka
+    PATHS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
+if(KAFKA_INCLUDE_DIR AND KAFKA_CPP_LIBRARY AND KAFKA_C_LIBRARY)
+    set(KAFKA_FOUND TRUE)
+    message(STATUS "librdkafka found: ${KAFKA_CPP_LIBRARY}")
+else()
+    set(KAFKA_FOUND FALSE)
+    message(STATUS "librdkafka not found, KafkaProducer/Consumer test skipped")
+endif()
+
 # 测试
 file(GLOB TEST_SOURCES tests/*.cpp)
 foreach(TEST_FILE ${TEST_SOURCES})
@@ -152,6 +167,9 @@ foreach(TEST_FILE ${TEST_SOURCES})
     if(TEST_NAME STREQUAL "test_redis_pool" AND NOT REDIS_FOUND)
         continue()
     endif()
+    if(TEST_NAME STREQUAL "test_kafka_producer_consumer" AND NOT KAFKA_FOUND)
+        continue()
+    endif()
     add_executable(${TEST_NAME} ${TEST_FILE})
     target_link_libraries(${TEST_NAME} mymuduo nlohmann_json::nlohmann_json OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB pthread)
     # 额外依赖
@@ -160,6 +178,10 @@ foreach(TEST_FILE ${TEST_SOURCES})
     endif()
     if(TEST_NAME STREQUAL "test_redis_pool" AND REDIS_FOUND)
         target_link_libraries(${TEST_NAME} ${REDIS_LIBRARY})
+    endif()
+    if(TEST_NAME STREQUAL "test_kafka_producer_consumer" AND KAFKA_FOUND)
+        target_include_directories(${TEST_NAME} PRIVATE ${KAFKA_INCLUDE_DIR})
+        target_link_libraries(${TEST_NAME} ${KAFKA_CPP_LIBRARY} ${KAFKA_C_LIBRARY})
     endif()
 endforeach()
 
