@@ -1,6 +1,6 @@
 /**
  * @file test_redis_sentinel.cpp
- * @brief RedisPool sentinel 模式 (Phase 5b.1)：解析 master + 真实读写。
+ * @brief RedisPool sentinel 模式 (Phase 5b.1) + master switch 计数器 (5b.6)
  *
  * 跑前提：
  *   bash deploy/redis-sentinel/up.sh   # 在 muduo-im 仓库根
@@ -8,6 +8,7 @@
  * 跳过：SKIP_SENTINEL_TEST=1
  */
 #include "src/pool/RedisPool.h"
+#include "src/util/Metrics.h"
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -53,6 +54,25 @@ TEST(sentinel_unknown_master_falls_back_to_host_port) {
     pool.release(std::move(conn));
 }
 
+// Phase 5b.6: 多次 createConnection 同一主，counter 不应递增（只有 master 切换时才 +1）
+TEST(switch_counter_stable_when_master_unchanged) {
+    int64_t before = Metrics::instance().getCounter("redis_sentinel_master_switches_total");
+    RedisPoolConfig cfg;
+    cfg.sentinels = {"127.0.0.1:26379"};
+    cfg.sentinelMaster = "im-master";
+    cfg.minSize = 1; cfg.maxSize = 5;
+    RedisPool pool(cfg);
+    // 强制建多条连接（触发多次 sentinel resolve）
+    for (int i = 0; i < 4; ++i) {
+        auto c = pool.acquire(2000);
+        assert(c && c->valid());
+        // 不 release，强制 createConnection 走多次
+    }
+    int64_t after = Metrics::instance().getCounter("redis_sentinel_master_switches_total");
+    // 同一主，counter 不应递增
+    assert(after == before);
+}
+
 int main() {
     if (std::getenv("SKIP_SENTINEL_TEST")) {
         std::cerr << "SKIP\n";
@@ -60,6 +80,7 @@ int main() {
     }
     RUN_TEST(sentinel_resolves_master_and_does_io);
     RUN_TEST(sentinel_unknown_master_falls_back_to_host_port);
+    RUN_TEST(switch_counter_stable_when_master_unchanged);
     std::cerr << "ALL OK\n";
     return 0;
 }

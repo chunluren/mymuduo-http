@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "util/Metrics.h"
 #include <hiredis/hiredis.h>
 #include <string>
 #include <vector>
@@ -352,6 +353,13 @@ private:
             if (resolved.second > 0) {
                 targetHost = resolved.first;
                 targetPort = resolved.second;
+                // Phase 5b.6: failover 检测 — master 地址变了就 ++counter
+                std::string newMaster = targetHost + ":" + std::to_string(targetPort);
+                std::lock_guard<std::mutex> lk(masterMu_);
+                if (!lastMaster_.empty() && lastMaster_ != newMaster) {
+                    Metrics::instance().increment("redis_sentinel_master_switches_total");
+                }
+                lastMaster_ = newMaster;
             }
             // 解析失败：退回到 host/port 兜底（最坏情况下还能连上老主）
         }
@@ -391,4 +399,8 @@ private:
     std::queue<RedisConnection::Ptr> pool_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
+
+    // Phase 5b.6: sentinel failover 检测
+    mutable std::mutex masterMu_;
+    std::string         lastMaster_;
 };
