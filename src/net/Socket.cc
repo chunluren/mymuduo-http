@@ -24,9 +24,10 @@ void Socket::bindAddress(const InetAddress &localaddr)
 
 void Socket::listen()
 {
-    // 上限取大头：内核会取 min(backlog, /proc/sys/net/core/somaxconn)
-    // 给 SOMAXCONN（一般 4096，按需 sysctl 调到 32768）让真实上限由 sysctl 控制。
-    if (0 != ::listen(sockfd_, SOMAXCONN))
+    // 给一个超大 backlog，让真实上限由内核 /proc/sys/net/core/somaxconn 决定。
+    // 注意：glibc 的 SOMAXCONN 常量在多数发行版上是 4096（编译期），用它会
+    // 把上限钉死在 4096。这里直接写 65535（内核会自己取 min(backlog, somaxconn)）。
+    if (0 != ::listen(sockfd_, 65535))
     {
         LOG_FATAL("listen sockfd:%d fail \n", sockfd_);
     }
