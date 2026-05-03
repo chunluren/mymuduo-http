@@ -40,8 +40,10 @@ public:
 
     KafkaConsumer(const std::vector<std::string>& brokers,
                   std::string groupId,
-                  std::vector<std::string> topics)
-        : groupId_(std::move(groupId)), topics_(std::move(topics)) {
+                  std::vector<std::string> topics,
+                  int pollTimeoutMs = 50)   // Phase 1.7：默认 50ms（旧 500ms）
+        : groupId_(std::move(groupId)), topics_(std::move(topics)),
+          pollTimeoutMs_(pollTimeoutMs) {
         std::string list;
         for (size_t i = 0; i < brokers.size(); ++i) {
             if (i) list += ',';
@@ -102,7 +104,7 @@ public:
 private:
     void pollLoop() {
         while (running_.load()) {
-            std::unique_ptr<RdKafka::Message> msg(consumer_->consume(500));
+            std::unique_ptr<RdKafka::Message> msg(consumer_->consume(pollTimeoutMs_));
             switch (msg->err()) {
                 case RdKafka::ERR__TIMED_OUT:
                     continue;
@@ -147,4 +149,5 @@ private:
     std::atomic<uint64_t> consumed_{0};
     std::atomic<uint64_t> errors_{0};
     std::atomic<uint64_t> retries_{0};
+    int pollTimeoutMs_;
 };
