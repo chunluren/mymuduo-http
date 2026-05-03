@@ -24,7 +24,9 @@ void Socket::bindAddress(const InetAddress &localaddr)
 
 void Socket::listen()
 {
-    if (0 != ::listen(sockfd_, 1024))
+    // 上限取大头：内核会取 min(backlog, /proc/sys/net/core/somaxconn)
+    // 给 SOMAXCONN（一般 4096，按需 sysctl 调到 32768）让真实上限由 sysctl 控制。
+    if (0 != ::listen(sockfd_, SOMAXCONN))
     {
         LOG_FATAL("listen sockfd:%d fail \n", sockfd_);
     }
