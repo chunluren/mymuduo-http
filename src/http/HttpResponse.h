@@ -88,6 +88,12 @@ public:
     int bodyFileFd_ = -1;
     size_t bodyFileSize_ = 0;
 
+    /// 异步响应：handler 把工作派到 ThreadPool 后立即返回，HttpServer 不要 send。
+    /// Handler 自己拿到 req.connection() 在 worker 里完成响应序列化与 conn->send。
+    /// 注意：deferred 时 HttpServer 也不会做 keepAlive close 决策与 pipeline 推进，
+    /// handler 必须自己负责 conn->shutdown（如需要）。
+    bool deferred = false;
+
     /**
      * @brief 默认构造函数
      *
