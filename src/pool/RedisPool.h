@@ -36,14 +36,21 @@
 
 /// Redis 连接池配置
 struct RedisPoolConfig {
-    std::string host = "127.0.0.1";     ///< Redis 主机地址
-    int port = 6379;                     ///< Redis 端口
+    std::string host = "127.0.0.1";     ///< Redis 主机地址（直连模式）
+    int port = 6379;                     ///< Redis 端口（直连模式）
     std::string password;                ///< 认证密码（空则不认证）
     int db = 0;                          ///< 数据库编号
     size_t minSize = 5;                  ///< 最小连接数
     size_t maxSize = 20;                 ///< 最大连接数
     int idleTimeoutSec = 60;             ///< 空闲超时（秒）
     int connectTimeoutSec = 5;           ///< 连接超时（秒）
+
+    /// Sentinel 模式（可选）：填了 sentinels 时 host/port 被忽略，
+    /// 每次新建连接前先问 sentinel 拿当前主地址。Sentinel 自动 failover
+    /// 后下一次 createConnection 会自然切到新主。
+    /// 格式：host:port，e.g. "127.0.0.1:26379"
+    std::vector<std::string> sentinels;
+    std::string sentinelMaster = "im-master";  ///< sentinel 监控的主名
 };
 
 /**
@@ -288,13 +295,69 @@ public:
     }
 
 private:
+    /// 跑一遍所有 sentinel 问 "当前主在哪"，第一个回答的就采用。
+    /// 失败时返回 {"", 0}。
+    static std::pair<std::string,int> resolveMasterViaSentinel(
+            const std::vector<std::string>& sentinels,
+            const std::string& masterName,
+            int connectTimeoutSec) {
+        struct timeval tv{ connectTimeoutSec, 0 };
+        for (const auto& addr : sentinels) {
+            auto colon = addr.find(':');
+            if (colon == std::string::npos) continue;
+            std::string h = addr.substr(0, colon);
+            int p;
+            try { p = std::stoi(addr.substr(colon + 1)); }
+            catch (...) { continue; }
+
+            redisContext* sctx = redisConnectWithTimeout(h.c_str(), p, tv);
+            if (!sctx || sctx->err) {
+                if (sctx) redisFree(sctx);
+                continue;
+            }
+            auto* reply = static_cast<redisReply*>(redisCommand(
+                sctx, "SENTINEL get-master-addr-by-name %s", masterName.c_str()));
+            if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements == 2
+                && reply->element[0]->type == REDIS_REPLY_STRING
+                && reply->element[1]->type == REDIS_REPLY_STRING) {
+                std::string mh(reply->element[0]->str, reply->element[0]->len);
+                int mp = 0;
+                try { mp = std::stoi(std::string(reply->element[1]->str,
+                                                 reply->element[1]->len)); }
+                catch (...) { mp = 0; }
+                freeReplyObject(reply);
+                redisFree(sctx);
+                if (mp > 0) return {mh, mp};
+            } else if (reply) {
+                freeReplyObject(reply);
+            }
+            redisFree(sctx);
+        }
+        return {"", 0};
+    }
+
     RedisConnection::Ptr createConnection() {
         struct timeval tv;
         tv.tv_sec = config_.connectTimeoutSec;
         tv.tv_usec = 0;
 
+        // Sentinel 模式：每次新建连接都重新解析当前主。Sentinel 自动 failover
+        // 后下一次 createConnection 自然切到新主，业务层无感。
+        std::string targetHost = config_.host;
+        int         targetPort = config_.port;
+        if (!config_.sentinels.empty()) {
+            auto resolved = resolveMasterViaSentinel(
+                config_.sentinels, config_.sentinelMaster,
+                config_.connectTimeoutSec);
+            if (resolved.second > 0) {
+                targetHost = resolved.first;
+                targetPort = resolved.second;
+            }
+            // 解析失败：退回到 host/port 兜底（最坏情况下还能连上老主）
+        }
+
         redisContext* ctx = redisConnectWithTimeout(
-            config_.host.c_str(), config_.port, tv);
+            targetHost.c_str(), targetPort, tv);
 
         if (!ctx || ctx->err) {
             if (ctx) redisFree(ctx);
