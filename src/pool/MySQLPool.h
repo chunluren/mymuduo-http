@@ -44,6 +44,7 @@
 #include <memory>
 #include <chrono>
 #include <functional>
+#include <atomic>
 #include <mysql/mysql.h>
 
 /**
@@ -436,6 +437,34 @@ public:
      *
      * 优先复用现有连接 (带 ping 检查)，否则创建新连接
      */
+    /**
+     * @brief Phase 2 读写分离：注册一个只读副本池
+     *
+     * 注册后 acquireRead 会按 round-robin 在 replicas 之间分配；acquire/acquireWrite
+     * 始终用本池（master）。没注册任何 replica → acquireRead 退化为 acquire，单
+     * MySQL 部署透明工作。
+     *
+     * @param replica 一个独立的 MySQLPool 实例，连接到只读 slave
+     */
+    void addReadReplica(std::shared_ptr<MySQLPool> replica) {
+        if (replica) readReplicas_.push_back(std::move(replica));
+    }
+
+    /// 写路径：始终走本池（master）。语义同 acquire()，只是命名更明确。
+    MySQLConnection::Ptr acquireWrite(int timeoutMs = 5000) { return acquire(timeoutMs); }
+
+    /// 读路径：注册了 replicas 时 round-robin 选其一，否则走 master。
+    /// **注意**：MySQL 主从复制有 lag（semi-sync 也有几 ms），刚写完立刻读
+    /// **同一行**应该走 acquireWrite 防 stale read。
+    MySQLConnection::Ptr acquireRead(int timeoutMs = 5000) {
+        if (readReplicas_.empty()) return acquire(timeoutMs);
+        size_t idx = roundRobin_.fetch_add(1, std::memory_order_relaxed) % readReplicas_.size();
+        auto conn = readReplicas_[idx]->acquire(timeoutMs);
+        if (conn && conn->valid()) return conn;
+        // replica 不可达 → fallback 到 master，业务可用性优先
+        return acquire(timeoutMs);
+    }
+
     MySQLConnection::Ptr acquire(int timeoutMs = 5000) {
         std::unique_lock<std::mutex> lock(mutex_);
 
@@ -602,4 +631,9 @@ private:
     std::queue<MySQLConnection::Ptr> pool_;     ///< 空闲连接队列
     mutable std::mutex mutex_;                  ///< 保护队列
     std::condition_variable cv_;                ///< 等待条件
+
+    // Phase 2 读写分离：本池作为"主库"时挂的从库列表
+    // 没注册任何 replica → acquireRead 退化为 acquire（单库部署）
+    std::vector<std::shared_ptr<MySQLPool>> readReplicas_;
+    std::atomic<size_t> roundRobin_{0};
 };
