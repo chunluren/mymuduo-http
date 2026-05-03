@@ -28,6 +28,10 @@
 #include <string>
 #include <unordered_map>
 #include <algorithm>
+#include <memory>
+
+class TcpConnection;
+using TcpConnectionPtr = std::shared_ptr<TcpConnection>;
 
 /**
  * @enum HttpMethod
@@ -85,6 +89,16 @@ public:
      * 初始化 method 和 version 为 UNKNOWN
      */
     HttpRequest() : method(HttpMethod::UNKNOWN), version(HttpVersion::UNKNOWN) {}
+
+    /**
+     * @brief 持有连接的 weak 引用，给 deferred 模式 handler 用
+     *
+     * HttpServer::onMessage 创建 request 后会调 setConnection(conn)。Handler 想做
+     * 异步响应（把工作丢给 ThreadPool 后才回来 send）就从这里拿到 conn 自己发。
+     * 同步 handler 不需要用这个。
+     */
+    void setConnection(const TcpConnectionPtr& c) { conn_ = c; }
+    TcpConnectionPtr connection() const { return conn_.lock(); }
 
     /**
      * @brief 解析请求行
@@ -276,6 +290,8 @@ public:
     }
 
 private:
+    std::weak_ptr<TcpConnection> conn_;  ///< 异步 handler 用的连接弱引用
+
     /**
      * @brief 字符串转 HTTP 方法
      * @param s 方法字符串

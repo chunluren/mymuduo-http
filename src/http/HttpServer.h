@@ -200,9 +200,17 @@ private:
                 return;
             }
 
+            // 让 handler 能在 deferred 模式下从 req.connection() 拿到 conn
+            request.setConnection(conn);
+
             HttpResponse response;
             core_.handleRequest(request, response);
             core_.postProcessResponse(request, response);
+
+            // Deferred：handler 已把工作丢给后台线程，发送由它自己完成。
+            // HttpServer 退出 onMessage，不发、不 shutdown、不 pipeline。
+            // 后续 pipeline 数据会在 conn 下次有可读事件时再触发 onMessage。
+            if (response.deferred) return;
 
             response.closeConnection = !request.keepAlive();
             // 三条路径：
